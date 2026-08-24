@@ -340,24 +340,17 @@ namespace MYSFTP
                     }
                 }
 
-                StringBuilder zipCmd = new StringBuilder();
-                zipCmd.Append("cd " + EscapeShell(parentDir) + " && ");
-
                 StringBuilder itemsStr = new StringBuilder();
                 foreach (string rel in relNames)
                 {
                     if (!string.IsNullOrEmpty(rel)) itemsStr.Append(" " + EscapeShell(rel));
                 }
 
-                zipCmd.Append("(");
-                zipCmd.Append("zip -r -q - " + itemsStr.ToString() + " 2>/dev/null || ");
-                zipCmd.Append("python3 -c \"import zipfile,sys,os; z=zipfile.ZipFile(sys.stdout.buffer,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'.')) for a in sys.argv[1:] for r,_,fs in (os.walk(a) if os.path.isdir(a) else [('',[],[a])]) for f in fs]; z.close()\" " + itemsStr.ToString() + " 2>/dev/null || ");
-                zipCmd.Append("python -c \"import zipfile,sys,os; z=zipfile.ZipFile(sys.stdout,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'.')) for a in sys.argv[1:] for r,_,fs in (os.walk(a) if os.path.isdir(a) else [('',[],[a])]) for f in fs]; z.close()\" " + itemsStr.ToString() + " 2>/dev/null");
-                zipCmd.Append(") | base64 -w 0");
+                string tarCmd = "cd " + EscapeShell(parentDir) + " && tar -czf - " + itemsStr.ToString() + " 2>/dev/null | base64 -w 0";
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + zipCmd.ToString() + "\"";
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + tarCmd + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
@@ -371,14 +364,13 @@ namespace MYSFTP
                 proc.WaitForExit(60000);
                 if (!proc.HasExited) try { proc.Kill(); } catch { }
 
-                try
+                byte[] tarGzBytes = Convert.FromBase64String(b64.Trim());
+                Dictionary<string, byte[]> extractedFiles = ExtractTar(tarGzBytes);
+                if (extractedFiles.Count > 0)
                 {
-                    return Convert.FromBase64String(b64.Trim());
+                    return ZipPacker.CreateZip(extractedFiles);
                 }
-                catch
-                {
-                    return new byte[0];
-                }
+                return new byte[0];
             }
             catch
             {
@@ -388,6 +380,87 @@ namespace MYSFTP
             {
                 try { File.Delete(apPath); } catch { }
             }
+        }
+
+        private static Dictionary<string, byte[]> ExtractTar(byte[] tarGzBytes)
+        {
+            Dictionary<string, byte[]> files = new Dictionary<string, byte[]>();
+            if (tarGzBytes == null || tarGzBytes.Length == 0) return files;
+
+            try
+            {
+                byte[] tarBytes;
+                if (tarGzBytes.Length > 2 && tarGzBytes[0] == 0x1f && tarGzBytes[1] == 0x8b)
+                {
+                    using (MemoryStream inMs = new MemoryStream(tarGzBytes))
+                    using (System.IO.Compression.GZipStream gz = new System.IO.Compression.GZipStream(inMs, System.IO.Compression.CompressionMode.Decompress))
+                    using (MemoryStream outMs = new MemoryStream())
+                    {
+                        byte[] buffer = new byte[8192];
+                        int read;
+                        while ((read = gz.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            outMs.Write(buffer, 0, read);
+                        }
+                        tarBytes = outMs.ToArray();
+                    }
+                }
+                else
+                {
+                    tarBytes = tarGzBytes;
+                }
+
+                int offset = 0;
+                while (offset + 512 <= tarBytes.Length)
+                {
+                    bool allZero = true;
+                    for (int i = 0; i < 512; i++)
+                    {
+                        if (tarBytes[offset + i] != 0) { allZero = false; break; }
+                    }
+                    if (allZero) break;
+
+                    string name = Encoding.UTF8.GetString(tarBytes, offset, 100).Trim('\0', ' ');
+                    string prefix = Encoding.UTF8.GetString(tarBytes, offset + 345, 155).Trim('\0', ' ');
+                    if (!string.IsNullOrEmpty(prefix))
+                    {
+                        name = prefix.TrimEnd('/') + "/" + name;
+                    }
+
+                    string sizeStr = Encoding.ASCII.GetString(tarBytes, offset + 124, 12).Trim('\0', ' ');
+                    long size = 0;
+                    if (!string.IsNullOrEmpty(sizeStr))
+                    {
+                        try { size = Convert.ToInt64(sizeStr, 8); } catch { }
+                    }
+
+                    char typeFlag = (char)tarBytes[offset + 156];
+                    offset += 512;
+
+                    if (typeFlag == '0' || typeFlag == '\0' || typeFlag == '7')
+                    {
+                        if (offset + size <= tarBytes.Length)
+                        {
+                            byte[] fileData = new byte[size];
+                            Array.Copy(tarBytes, offset, fileData, 0, (int)size);
+                            if (!string.IsNullOrEmpty(name))
+                            {
+                                files[name] = fileData;
+                            }
+                        }
+                        long padding = (512 - (size % 512)) % 512;
+                        offset += (int)(size + padding);
+                    }
+                    else
+                    {
+                        long padding = (512 - (size % 512)) % 512;
+                        offset += (int)(size + padding);
+                    }
+                }
+            }
+            catch { }
+
+            return files;
         }
 
         public string WriteRemoteBytes(string remotePath, byte[] data)
@@ -536,7 +609,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v200");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v201");
             }
             catch { }
 
@@ -757,7 +830,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v200\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v201\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -1741,7 +1814,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.0 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.1 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2993,5 +3066,130 @@ namespace MYSFTP
 </body>
 </html>";
         #endregion
+    }
+
+    public static class ZipPacker
+    {
+        public static byte[] CreateZip(Dictionary<string, byte[]> files)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                List<long> headerOffsets = new List<long>();
+                List<string> entryNames = new List<string>();
+                List<uint> crcs = new List<uint>();
+                List<uint> compSizes = new List<uint>();
+                List<uint> uncompSizes = new List<uint>();
+
+                foreach (KeyValuePair<string, byte[]> kv in files)
+                {
+                    string name = kv.Key.Replace('\\', '/').TrimStart('/');
+                    byte[] data = kv.Value ?? new byte[0];
+                    uint crc = CalculateCrc32(data);
+
+                    byte[] compressed = null;
+                    ushort method = 8; // Deflate
+                    if (data.Length > 0)
+                    {
+                        using (MemoryStream compMs = new MemoryStream())
+                        {
+                            using (System.IO.Compression.DeflateStream ds = new System.IO.Compression.DeflateStream(compMs, System.IO.Compression.CompressionMode.Compress, true))
+                            {
+                                ds.Write(data, 0, data.Length);
+                            }
+                            compressed = compMs.ToArray();
+                        }
+                    }
+
+                    if (compressed == null || compressed.Length >= data.Length || data.Length == 0)
+                    {
+                        method = 0;
+                        compressed = data;
+                    }
+
+                    headerOffsets.Add(ms.Position);
+                    entryNames.Add(name);
+                    crcs.Add(crc);
+                    compSizes.Add((uint)compressed.Length);
+                    uncompSizes.Add((uint)data.Length);
+
+                    byte[] nameBytes = Encoding.UTF8.GetBytes(name);
+
+                    BinaryWriter bw = new BinaryWriter(ms);
+                    bw.Write((uint)0x04034b50); // Signature
+                    bw.Write((ushort)20);       // Version needed (2.0)
+                    bw.Write((ushort)0x0800);   // General purpose flags (UTF-8)
+                    bw.Write((ushort)method);   // Compression method
+                    bw.Write((ushort)0);        // Last mod time
+                    bw.Write((ushort)0x5241);   // Last mod date
+                    bw.Write(crc);              // CRC-32
+                    bw.Write((uint)compressed.Length); // Compressed size
+                    bw.Write((uint)data.Length);       // Uncompressed size
+                    bw.Write((ushort)nameBytes.Length); // File name length
+                    bw.Write((ushort)0);        // Extra field length
+                    bw.Write(nameBytes);
+                    if (compressed.Length > 0)
+                    {
+                        bw.Write(compressed);
+                    }
+                }
+
+                long centralDirStart = ms.Position;
+                BinaryWriter bwCent = new BinaryWriter(ms);
+
+                for (int i = 0; i < entryNames.Count; i++)
+                {
+                    byte[] nameBytes = Encoding.UTF8.GetBytes(entryNames[i]);
+                    bwCent.Write((uint)0x02014b50); // Central header signature
+                    bwCent.Write((ushort)20);       // Version made by
+                    bwCent.Write((ushort)20);       // Version needed
+                    bwCent.Write((ushort)0x0800);   // Flags (UTF-8)
+                    bwCent.Write((ushort)(compSizes[i] == uncompSizes[i] && uncompSizes[i] > 0 ? 0 : 8)); // Method
+                    bwCent.Write((ushort)0);        // Time
+                    bwCent.Write((ushort)0x5241);   // Date
+                    bwCent.Write(crcs[i]);          // CRC-32
+                    bwCent.Write(compSizes[i]);     // Comp size
+                    bwCent.Write(uncompSizes[i]);   // Uncomp size
+                    bwCent.Write((ushort)nameBytes.Length);
+                    bwCent.Write((ushort)0);        // Extra len
+                    bwCent.Write((ushort)0);        // Comment len
+                    bwCent.Write((ushort)0);        // Disk start
+                    bwCent.Write((ushort)0);        // Internal attrs
+                    bwCent.Write((uint)0);          // External attrs
+                    bwCent.Write((uint)headerOffsets[i]); // Local header offset
+                    bwCent.Write(nameBytes);
+                }
+
+                long centralDirEnd = ms.Position;
+                long centralDirSize = centralDirEnd - centralDirStart;
+
+                bwCent.Write((uint)0x06054b50); // Signature
+                bwCent.Write((ushort)0);        // Disk number
+                bwCent.Write((ushort)0);        // Start disk
+                bwCent.Write((ushort)entryNames.Count); // Entries on disk
+                bwCent.Write((ushort)entryNames.Count); // Total entries
+                bwCent.Write((uint)centralDirSize);     // Central dir size
+                bwCent.Write((uint)centralDirStart);    // Central dir offset
+                bwCent.Write((ushort)0);        // Comment length
+
+                return ms.ToArray();
+            }
+        }
+
+        private static uint CalculateCrc32(byte[] data)
+        {
+            uint crc = 0xFFFFFFFF;
+            if (data == null) return ~crc;
+            for (int i = 0; i < data.Length; i++)
+            {
+                byte b = data[i];
+                crc ^= b;
+                for (int j = 0; j < 8; j++)
+                {
+                    if ((crc & 1) != 0) crc = (crc >> 1) ^ 0xEDB88320;
+                    else crc >>= 1;
+                }
+            }
+            return ~crc;
+        }
     }
 }

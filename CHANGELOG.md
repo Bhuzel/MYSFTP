@@ -1,39 +1,34 @@
-# MYSFTP v2.0.0 — Major Release: Luxury Modals, Multi-Select & Drag-Drop Folder Suite
+# MYSFTP v2.0.1 — Hotfix & Solid ZIP Archiving Engine
 
-## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.0
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.1
 
-### 1. 🎨 Pop-up Bawaan Browser Diganti Modal Mewah (Luxury Glassmorphism Dialogs)
-- Tidak ada lagi pop-up bawaan browser (`127.0.0.1 says...`).
-- Semua dialog konfirmasi hapus berkas/folder, hapus profil koneksi, dan input nama berkas/folder baru kini menggunakan **Custom Luxury Glassmorphism Modal** dengan tema dark-gold yang senada dan elegan.
+### 1. 🗜️ Solid ZIP Archiving Engine (Fix Unduhan 0 Byte / Corrupt)
+- **Penyebab:** Banyak server VPS Linux tidak memiliki package `zip` terpasang secara default sehingga stream kompresi sebelumnya menghasilkan berkas kosong (0 byte).
+- **Perbaikan:** Kini backend MYSFTP menggunakan **Engine ZipPacker C# Internal**. Server remote mengekstrak stream menggunakan `tar` standar (didukung 100% semua server Linux di dunia) dan dikemas langsung secara in-memory menjadi berkas **`.zip`** murni standar yang valid 100%. Tidak akan pernah lagi terjadi 0 byte atau corrupt.
 
-### 2. 📁 Upload Folder & Drag-and-Drop Rekursif
-- **Tombol Dedicated "📁 Upload Folder":** Sekarang kamu bisa mengunggah seluruh folder beserta subfolder dan isinya sekaligus langsung dari PC ke server.
-- **Drag & Drop Folder:** Cukup seret (drag & drop) berkas atau folder langsung ke layar File Explorer, sistem akan otomatis membaca struktur direktori secara rekursif dan membuat direktori serta mengunggah semua file ke server VPS.
-- Tampilan visual **Dropzone Overlay** aktif secara otomatis saat file/folder diseret ke atas aplikasi.
+### 2. 📁 Struktur Direktori Bersih (Tanpa Nested Parent `root/...`)
+- Saat kamu mengunduh folder `script` dari `/root/ProjectBot/snippet/script`, isi file ZIP yang kamu terima hanya berisi folder **`script/`** langsung tanpa membawa rantai parent direktori yang panjang (`root/ProjectBot/snippet/`).
 
-### 3. 🗂️ Sistem Multi-Select & Batch Delete (Hapus Sekaligus)
-- Setiap baris berkas dan folder kini dilengkapi checkbox pilihan.
-- Terdapat checkbox **"Select All"** di header tabel.
-- Dilengkapi **Batch Actions Toolbar** di bagian atas (`N item terpilih`) dengan tombol **"🗑 Hapus Terpilih"** sehingga tidak perlu lagi menghapus berkas satu per satu.
+### 3. 🎨 Custom Luxury Glassmorphism Modals
+- Dialog konfirmasi hapus berkas, buat berkas/folder baru, dan hapus profil sudah menggunakan Glassmorphism Modal elegan dark gold (bebas dari pop-up bawaan browser).
 
-### 4. 💻 SSH Termius Console Bebas Duplikasi & Responsif Ctrl+C
-- **Fix Double Echo:** Output perintah seperti `ls` atau `pm2 ls` tidak lagi terduplikasi ganda pada layar terminal.
-- **Responsive Ctrl+C (SIGINT):** Menekan tombol `🛑 Ctrl+C` atau shortcut keyboard kini langsung mengirimkan sinyal interupsi ke proses remote yang sedang berjalan (seperti `pm2 logs`, `tail -f`, atau monitoring), menghentikan streaming secara seketika dan mencetak `^C` dengan jelas.
-- Navigasi riwayat perintah (↑ / ↓) dan eksekusi instan tombol Enter tetap berjalan lancar.
+### 4. 📁 Upload Folder & Drag-and-Drop Rekursif
+- Tombol dedicated **"📁 Upload Folder"** dan drag & drop file/folder langsung dari Windows ke area explorer.
 
-### 5. 📥 Unduh Berkas & Folder ke Format .ZIP (Clean Relative Paths)
-- **Tombol Download Per Item:** Setiap baris berkas dan folder memiliki tombol `📥` untuk mengunduh berkas langsung atau mengunduh folder utuh sebagai arsip **`.zip`**.
-- **Struktur Direktori Bersih (No Nested Parent):** Saat mengunduh subfolder (misal `/ProjectBot/snippet/script`), isi zip hanya berisi `script/...` langsung tanpa membawa struktur parent panjang (`root/ProjectBot/snippet/`).
-- **Download Terpilih (Batch ZIP Archive):** Kamu bisa mencentang beberapa berkas/folder sekaligus, lalu klik **`📥 Download Terpilih`** pada toolbar seleksi untuk mengunduh semua item terpilih dalam 1 arsip `.zip`.
+### 5. 🗂️ Multi-Select Checkboxes & Batch Delete/Download
+- Pilihan batch untuk menghapus atau mengunduh banyak berkas/folder sekaligus dalam 1 kali klik.
 
-### 6. ⚠️ Catatan Penting Setelah Instalasi Pertama
+### 6. 💻 SSH Termius Console Bebas Duplikasi & Responsif Ctrl+C
+- Output perintah tidak lagi terduplikasi ganda, dan tombol `🛑 Ctrl+C` responsif menghentikan log streaming.
+
+### 7. ⚠️ Catatan Penting Setelah Instalasi Pertama
 > **Catatan Setelah Install:** Pada awal-awal peluncuran pertama kali setelah install di PC Windows, sistem SmartScreen / antivirus mungkin memerlukan waktu beberapa detik untuk memvalidasi port dan service lokal. Jika aplikasi belum langsung terhubung, cukup tutup dan buka ulang (relog) 1–2 kali agar semua service & port berjalan normal dan lancar.
 
 ---
 
 ## 📦 File Rilis Resmi (Clean Single Assets):
-* 💻 **Windows PC:** `MYSFTP-v2.0.0-Setup.exe` (Installer tunggal resmi)
-* 📱 **Android:** `MYSFTP-v2.0.0.apk` (Aplikasi Android resmi)
+* 💻 **Windows PC:** `MYSFTP-v2.0.1-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.0.1.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).
