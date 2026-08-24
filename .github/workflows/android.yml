@@ -9,16 +9,20 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     name: Build MYSFTP (Android APK & Windows EXE)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -31,7 +35,7 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build Android Debug APK
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleDebug --no-daemon
 
     - name: Prepare Release Artifacts
       run: |
@@ -42,39 +46,24 @@ jobs:
           cp MYSFTP.exe build-artifacts/MYSFTP.exe
         fi
 
-    - name: Upload APK Artifact
+    - name: Upload APK Artifact (Actions Tab)
       uses: actions/upload-artifact@v4
       with:
-        name: MYSFTP-APK
-        path: build-artifacts/MYSFTP.apk
+        name: MYSFTP-v1.0.0-Build
+        path: build-artifacts/
 
     - name: Create or Update GitHub Release
       if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+        name: "MYSFTP v1.0.0 (Official Release)"
+        body: "🌟 **MYSFTP v1.0.0 — Luxury Dark Edition** by ZellRayy.\n\n### 📦 File Unduhan:\n* 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (Aplikasi standalone portabel, tinggal klik ganda).\n* 📱 **HP Android:** Unduh `MYSFTP.apk` (Mendukung OTA Update otomatis)."
+        draft: false
+        prerelease: false
+        files: |
+          build-artifacts/MYSFTP.apk
+          build-artifacts/MYSFTP-v1.0.0.apk
+          build-artifacts/MYSFTP.exe
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-          TAG_NAME="${{ github.ref_name }}"
-          RELEASE_TITLE="MYSFTP Release $TAG_NAME"
-          PRERELEASE_FLAG=""
-        else
-          TAG_NAME="v1.0.0"
-          RELEASE_TITLE="MYSFTP v1.0.0 (Official Release)"
-          PRERELEASE_FLAG=""
-          
-          # Hapus rilis & tag lama jika ada agar selalu fresh
-          gh release delete "$TAG_NAME" --cleanup-tag --yes || true
-        fi
-        
-        # Kumpulkan semua aset release yang ada
-        RELEASE_FILES="build-artifacts/MYSFTP.apk build-artifacts/MYSFTP-v1.0.0.apk"
-        if [ -f "build-artifacts/MYSFTP.exe" ]; then
-          RELEASE_FILES="$RELEASE_FILES build-artifacts/MYSFTP.exe"
-        fi
-
-        # Buat rilis baru di GitHub
-        gh release create "$TAG_NAME" \
-          --title "$RELEASE_TITLE" \
-          $PRERELEASE_FLAG \
-          --notes "🌟 **MYSFTP v1.0.0 — Luxury Dark Edition** by ZellRayy. Rilis multi-platform: Unduh **MYSFTP.apk** untuk Android dan **MYSFTP.exe** untuk Windows PC / Laptop." \
-          $RELEASE_FILES
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
