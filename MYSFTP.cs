@@ -320,16 +320,44 @@ namespace MYSFTP
             string apPath = CreateAskPass();
             try
             {
-                StringBuilder tarCmd = new StringBuilder("tar -czf -");
+                // Determine parent directory and relative items
+                string firstPath = paths[0].Replace('\\', '/').TrimEnd('/');
+                int lastSlash = firstPath.LastIndexOf('/');
+                string parentDir = lastSlash > 0 ? firstPath.Substring(0, lastSlash) : (lastSlash == 0 ? "/" : ".");
+
+                List<string> relNames = new List<string>();
                 foreach (string itemPath in paths)
                 {
-                    if (!string.IsNullOrEmpty(itemPath)) tarCmd.Append(" " + EscapeShell(itemPath));
+                    string clean = itemPath.Replace('\\', '/').TrimEnd('/');
+                    if (clean.StartsWith(parentDir + "/"))
+                        relNames.Add(clean.Substring(parentDir.Length + 1));
+                    else if (parentDir == "/" && clean.StartsWith("/"))
+                        relNames.Add(clean.Substring(1));
+                    else
+                    {
+                        int slash = clean.LastIndexOf('/');
+                        relNames.Add(slash >= 0 ? clean.Substring(slash + 1) : clean);
+                    }
                 }
-                tarCmd.Append(" 2>/dev/null | base64 -w 0");
+
+                StringBuilder zipCmd = new StringBuilder();
+                zipCmd.Append("cd " + EscapeShell(parentDir) + " && ");
+
+                StringBuilder itemsStr = new StringBuilder();
+                foreach (string rel in relNames)
+                {
+                    if (!string.IsNullOrEmpty(rel)) itemsStr.Append(" " + EscapeShell(rel));
+                }
+
+                zipCmd.Append("(");
+                zipCmd.Append("zip -r -q - " + itemsStr.ToString() + " 2>/dev/null || ");
+                zipCmd.Append("python3 -c \"import zipfile,sys,os; z=zipfile.ZipFile(sys.stdout.buffer,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'.')) for a in sys.argv[1:] for r,_,fs in (os.walk(a) if os.path.isdir(a) else [('',[],[a])]) for f in fs]; z.close()\" " + itemsStr.ToString() + " 2>/dev/null || ");
+                zipCmd.Append("python -c \"import zipfile,sys,os; z=zipfile.ZipFile(sys.stdout,'w',zipfile.ZIP_DEFLATED); [z.write(os.path.join(r,f), os.path.relpath(os.path.join(r,f),'.')) for a in sys.argv[1:] for r,_,fs in (os.walk(a) if os.path.isdir(a) else [('',[],[a])]) for f in fs]; z.close()\" " + itemsStr.ToString() + " 2>/dev/null");
+                zipCmd.Append(") | base64 -w 0");
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + tarCmd.ToString() + "\"";
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + zipCmd.ToString() + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
@@ -1077,8 +1105,8 @@ namespace MYSFTP
                             byte[] archive = sshManager.ArchiveRemoteItems(pList);
                             string dirName = Path.GetFileName(fPath.TrimEnd('/'));
                             if (string.IsNullOrEmpty(dirName)) dirName = "folder";
-                            res.ContentType = "application/gzip";
-                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + dirName + ".tar.gz\"");
+                            res.ContentType = "application/zip";
+                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + dirName + ".zip\"");
                             res.ContentLength64 = archive.Length;
                             res.OutputStream.Write(archive, 0, archive.Length);
                             try { res.OutputStream.Flush(); } catch { }
@@ -1117,8 +1145,8 @@ namespace MYSFTP
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
                     {
                         byte[] archive = sshManager.ArchiveRemoteItems(paths);
-                        res.ContentType = "application/gzip";
-                        res.AddHeader("Content-Disposition", "attachment; filename=\"MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".tar.gz\"");
+                        res.ContentType = "application/zip";
+                        res.AddHeader("Content-Disposition", "attachment; filename=\"MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".zip\"");
                         res.ContentLength64 = archive.Length;
                         res.OutputStream.Write(archive, 0, archive.Length);
                         try { res.OutputStream.Flush(); } catch { }
@@ -2472,7 +2500,7 @@ namespace MYSFTP
       var url = '/api/fs/download?path=' + encodeURIComponent(path) + '&isDir=' + (isDir ? 'true' : 'false');
       var a = document.createElement('a');
       a.href = url;
-      a.download = isDir ? (name + '.tar.gz') : name;
+      a.download = isDir ? (name + '.zip') : name;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2489,7 +2517,7 @@ namespace MYSFTP
         return;
       }
       var count = selectedPaths.length;
-      toast('⏳ Mengompresi ' + count + ' item terpilih untuk diunduh...');
+      toast('⏳ Mengompresi ' + count + ' item terpilih (ZIP) untuk diunduh...');
       showLoader(true);
       fetch('/api/fs/batch-download', {
         method: 'POST',
@@ -2500,12 +2528,12 @@ namespace MYSFTP
         var url = window.URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'MYSFTP_Archive_' + Date.now() + '.tar.gz';
+        a.download = 'MYSFTP_Archive_' + Date.now() + '.zip';
         document.body.appendChild(a);
         a.click();
         a.remove();
         window.URL.revokeObjectURL(url);
-        toast('✔ Unduhan berhasil!');
+        toast('✔ Unduhan ZIP berhasil!');
       }).catch(function(err) {
         showLoader(false);
         toast('❌ Gagal mengunduh: ' + err.message);

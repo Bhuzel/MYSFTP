@@ -21,9 +21,10 @@
 - **Responsive Ctrl+C (SIGINT):** Menekan tombol `🛑 Ctrl+C` atau shortcut keyboard kini langsung mengirimkan sinyal interupsi ke proses remote yang sedang berjalan (seperti `pm2 logs`, `tail -f`, atau monitoring), menghentikan streaming secara seketika dan mencetak `^C` dengan jelas.
 - Navigasi riwayat perintah (↑ / ↓) dan eksekusi instan tombol Enter tetap berjalan lancar.
 
-### 5. 📥 Unduh Berkas & Folder (Single & Multi-Select Batch Archive)
-- **Tombol Download Per Item:** Setiap baris berkas dan folder memiliki tombol `📥` untuk mengunduh berkas langsung atau mengunduh folder utuh sebagai arsip `.tar.gz`.
-- **Download Terpilih (Batch Archive):** Kamu bisa mencentang beberapa berkas/folder sekaligus, lalu klik **`📥 Download Terpilih`** pada toolbar seleksi untuk mengunduh semua item terpilih dalam 1 arsip terkompresi.
+### 5. 📥 Unduh Berkas & Folder ke Format .ZIP (Clean Relative Paths)
+- **Tombol Download Per Item:** Setiap baris berkas dan folder memiliki tombol `📥` untuk mengunduh berkas langsung atau mengunduh folder utuh sebagai arsip **`.zip`**.
+- **Struktur Direktori Bersih (No Nested Parent):** Saat mengunduh subfolder (misal `/ProjectBot/snippet/script`), isi zip hanya berisi `script/...` langsung tanpa membawa struktur parent panjang (`root/ProjectBot/snippet/`).
+- **Download Terpilih (Batch ZIP Archive):** Kamu bisa mencentang beberapa berkas/folder sekaligus, lalu klik **`📥 Download Terpilih`** pada toolbar seleksi untuk mengunduh semua item terpilih dalam 1 arsip `.zip`.
 
 ### 6. ⚠️ Catatan Penting Setelah Instalasi Pertama
 > **Catatan Setelah Install:** Pada awal-awal peluncuran pertama kali setelah install di PC Windows, sistem SmartScreen / antivirus mungkin memerlukan waktu beberapa detik untuk memvalidasi port dan service lokal. Jika aplikasi belum langsung terhubung, cukup tutup dan buka ulang (relog) 1–2 kali agar semua service & port berjalan normal dan lancar.
