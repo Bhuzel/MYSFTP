@@ -2541,7 +2541,7 @@ namespace MYSFTP
     }
 
     function fsDel(path, name) {
-      customConfirm('Hapus Berkas / Folder', 'Apakah Anda yakin ingin menghapus "' + name + '" secara permanen dari server?', '🗑 Hapus', true, function() {
+      customConfirm('Hapus Berkas / Folder', 'Apakah Anda yakin ingin menghapus ' + name + ' secara permanen dari server?', '🗑 Hapus', true, function() {
         showLoader(true);
         fetch('/api/fs/delete',{
           method:'POST',
