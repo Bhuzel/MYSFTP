@@ -41,7 +41,7 @@ jobs:
       run: |
         mkdir -p build-artifacts
         cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.1.0.apk
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.2.0.apk
         if [ -f "MYSFTP.exe" ]; then
           cp MYSFTP.exe build-artifacts/MYSFTP.exe
         fi
@@ -49,21 +49,21 @@ jobs:
     - name: Upload APK Artifact (Actions Tab)
       uses: actions/upload-artifact@v4
       with:
-        name: MYSFTP-v1.1.0-Build
+        name: MYSFTP-v1.2.0-Build
         path: build-artifacts/
 
     - name: Create or Update GitHub Release
       if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.1.0' }}
-        name: "MYSFTP v1.1.0 (Luxury Edition)"
-        body: "🌟 **MYSFTP v1.1.0 — Luxury Dark Edition** by ZellRayy.\n\n### ✨ Pembaruan v1.1.0:\n* 📱 **Single-Pane Full Width by Default**: Tampilan browser SFTP langsung penuh dan nyaman di HP.\n* 💻 **Termius-Inspired Terminal**: Monospace zoom-out default (9.5sp), status bar server, dan auto-scroll ke bawah saat mengetik.\n* ⚡ **30-Minute Session Cache**: Sesi SFTP/SSH tersimpan aktif selama 30 menit tanpa perlu login berulang saat pindah layar.\n* 🖥️ **Windows Standalone EXE**: `MYSFTP.exe` berbasis socket TCP ringan (~134 KB) tanpa admin permission.\n\n### 📦 File Unduhan:\n* 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe`\n* 📱 **HP Android:** Unduh `MYSFTP.apk` (Mendukung OTA Update)"
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.2.0' }}
+        name: "MYSFTP v1.2.0 (Stable Release)"
+        body: "🌟 **MYSFTP v1.2.0 — Luxury Dark Edition** by ZellRayy.\n\n### ✨ Pembaruan v1.2.0:\n* 📱 **Navigasi Folder & Tombol Back Android**: Menekan tombol back HP atau mengetik `..` akan mundur folder per folder secara hierarkis tanpa keluar tiba-tiba ke menu awal.\n* 🗑️ **Perbaikan Hapus Folder SFTP (Recursive Delete)**: Menghapus folder yang berisi file/subfolder sekarang berhasil 100% tanpa pesan error failure.\n* 🖥️ **MYSFTP.exe Native Desktop Form**: Standalone 100% tanpa butuh browser luar, langsung terbuka lancar di Windows dengan icon kustom `Icon.jpg`.\n* 🎨 **Icon Aplikasi Baru**: Menggunakan `Icon.jpg` sebagai ikon resmi aplikasi.\n\n### 📦 File Unduhan:\n* 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (Standalone Native Form, tinggal klik ganda).\n* 📱 **HP Android:** Unduh `MYSFTP.apk` (Mendukung OTA Update otomatis)."
         draft: false
         prerelease: false
         files: |
           build-artifacts/MYSFTP.apk
-          build-artifacts/MYSFTP-v1.1.0.apk
+          build-artifacts/MYSFTP-v1.2.0.apk
           build-artifacts/MYSFTP.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

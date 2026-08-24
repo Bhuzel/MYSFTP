@@ -325,6 +325,18 @@ fun BrowserScreen(
     val activeTab = state.activeTab
     val activeTabState = if (activeTab == 1) state.tab1 else state.tab2
 
+    // Smart BackHandler: Navigates up directory tree when inside subfolders, exits to home only from root
+    androidx.activity.compose.BackHandler(enabled = true) {
+        val currentTabState = if (activeTab == 1) state.tab1 else state.tab2
+        val rootPath = if (currentTabState.connectionId == -1L) BrowserViewModel.getLocalRootPath().trimEnd('/') else "/"
+        val currentPath = currentTabState.currentPath.trimEnd('/')
+        if (currentPath.isNotEmpty() && currentPath != rootPath && currentPath != "/") {
+            vm.navigateUp(activeTab)
+        } else {
+            onBack()
+        }
+    }
+
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
@@ -1314,6 +1326,43 @@ fun FilePane(
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    val rootPath = if (tabState.connectionId == -1L) BrowserViewModel.getLocalRootPath().trimEnd('/') else "/"
+                    val currentTrimmed = tabState.currentPath.trimEnd('/')
+                    if (currentTrimmed.isNotEmpty() && currentTrimmed != rootPath && currentTrimmed != "/") {
+                        item(key = "__parent_folder_nav__") {
+                            ListItem(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onNavigateUp() }
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                                leadingContent = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.FolderOpen,
+                                            contentDescription = "Folder Induk",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                },
+                                headlineContent = {
+                                    Text(
+                                        ".. (Kembali ke folder induk)",
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            )
+                        }
+                    }
+
                     items(tabState.filteredFiles, key = { it.path }) { file ->
                         FileRow(
                             file = file,

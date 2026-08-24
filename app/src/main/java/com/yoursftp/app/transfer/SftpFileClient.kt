@@ -141,11 +141,51 @@ class SftpFileClient(private val context: Context, private val conn: Connection)
     }
 
     override fun deleteFile(path: String) {
-        requireChannel().rm(path)
+        val ch = requireChannel()
+        try {
+            ch.rm(path)
+        } catch (e: Exception) {
+            try {
+                deleteDirectoryRecursive(ch, path)
+            } catch (_: Exception) {
+                throw e
+            }
+        }
     }
 
     override fun deleteDirectory(path: String) {
-        requireChannel().rmdir(path)
+        val ch = requireChannel()
+        deleteDirectoryRecursive(ch, path)
+    }
+
+    private fun deleteDirectoryRecursive(ch: ChannelSftp, path: String) {
+        val entries = try {
+            @Suppress("UNCHECKED_CAST")
+            ch.ls(path) as java.util.Vector<ChannelSftp.LsEntry>
+        } catch (e: Exception) {
+            ch.rm(path)
+            return
+        }
+
+        for (entry in entries) {
+            val name = entry.filename
+            if (name == "." || name == "..") continue
+            val fullPath = joinPath(path, name)
+            if (entry.attrs.isDir) {
+                deleteDirectoryRecursive(ch, fullPath)
+            } else {
+                try {
+                    ch.rm(fullPath)
+                } catch (_: Exception) {
+                    try { ch.rmdir(fullPath) } catch (_: Exception) {}
+                }
+            }
+        }
+        try {
+            ch.rmdir(path)
+        } catch (_: Exception) {
+            ch.rm(path)
+        }
     }
 
     override fun makeDirectory(path: String) {
