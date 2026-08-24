@@ -267,9 +267,14 @@ namespace MYSFTP
             string apPath = CreateAskPass();
             try
             {
+                string rPath = remotePath.Replace('\\', '/');
+                int lastSlash = rPath.LastIndexOf('/');
+                string rDir = lastSlash > 0 ? rPath.Substring(0, lastSlash) : "/";
+
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"base64 -d > " + EscapeShell(remotePath) + "\"";
+                string remoteCmd = "mkdir -p " + EscapeShell(rDir) + " && base64 -d > " + EscapeShell(rPath);
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + remoteCmd + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
@@ -400,7 +405,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v199");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v200");
             }
             catch { }
 
@@ -621,7 +626,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v199\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v200\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -929,6 +934,32 @@ namespace MYSFTP
                     else
                     {
                         SendJson(res, DeleteLocalItem(fp));
+                    }
+                }
+                else if (path == "/api/fs/batch-delete" && req.HttpMethod == "POST")
+                {
+                    string body = ReadBody(req);
+                    List<string> paths = ParseJsonStringArray(body);
+                    if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
+                    {
+                        if (paths.Count > 0)
+                        {
+                            StringBuilder sb = new StringBuilder("rm -rf");
+                            foreach (string p in paths)
+                            {
+                                if (!string.IsNullOrEmpty(p)) sb.Append(" " + EscapeShell(p));
+                            }
+                            sshManager.RunCommand(sb.ToString(), 15000);
+                        }
+                        SendJson(res, "{\"success\":true}");
+                    }
+                    else
+                    {
+                        foreach (string p in paths)
+                        {
+                            if (!string.IsNullOrEmpty(p)) DeleteLocalItem(p);
+                        }
+                        SendJson(res, "{\"success\":true}");
                     }
                 }
                 else if (path == "/api/fs/create" && req.HttpMethod == "POST")
@@ -1287,6 +1318,44 @@ namespace MYSFTP
             return s.Replace("'", "'\\''");
         }
 
+        private static List<string> ParseJsonStringArray(string json)
+        {
+            List<string> list = new List<string>();
+            if (string.IsNullOrEmpty(json)) return list;
+            int idx = 0;
+            while (true)
+            {
+                int quoteStart = json.IndexOf('"', idx);
+                if (quoteStart < 0) break;
+                StringBuilder sb = new StringBuilder();
+                int i = quoteStart + 1;
+                for (; i < json.Length; i++)
+                {
+                    if (json[i] == '\\' && i + 1 < json.Length)
+                    {
+                        char next = json[i + 1];
+                        if (next == '"') { sb.Append('"'); i++; }
+                        else if (next == '\\') { sb.Append('\\'); i++; }
+                        else if (next == 'n') { sb.Append('\n'); i++; }
+                        else if (next == 'r') { sb.Append('\r'); i++; }
+                        else if (next == 't') { sb.Append('\t'); i++; }
+                        else { sb.Append(json[i]); }
+                    }
+                    else if (json[i] == '"')
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        sb.Append(json[i]);
+                    }
+                }
+                list.Add(sb.ToString());
+                idx = i + 1;
+            }
+            return list;
+        }
+
         #region Embedded Luxury HTML UI
         private const string HtmlUi = @"<!DOCTYPE html>
 <html lang=""id"">
@@ -1421,6 +1490,15 @@ namespace MYSFTP
     .fmeta { font-family:'JetBrains Mono'; color:var(--text-dim); font-size:12px; }
     .frow .del-btn { opacity:0; transition:opacity .15s; }
     .frow:hover .del-btn { opacity:1; }
+    .chk-box { width:15px; height:15px; accent-color:var(--gold); cursor:pointer; vertical-align:middle; }
+    .batch-bar { display:none; align-items:center; justify-content:space-between; background:rgba(205,189,148,0.1); border:1px solid var(--border-gold); padding:9px 16px; border-radius:var(--r-sm); margin-bottom:12px; animation:tIn .2s ease; }
+    .batch-bar.on { display:flex; }
+    .dropzone-overlay { position:absolute; inset:0; background:rgba(6,7,9,0.88); backdrop-filter:blur(8px); border:2px dashed var(--gold); border-radius:var(--r-md); display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; z-index:90; pointer-events:none; }
+    .dropzone-overlay.on { display:flex; }
+    .dropzone-icon { font-size:44px; animation:pGlow 1.5s infinite ease-in-out; }
+    .dropzone-title { font-family:'Outfit'; font-size:18px; font-weight:800; color:var(--gold-light); }
+    .dropzone-sub { font-size:13px; color:var(--text-dim); }
+    .frow.selected { background:rgba(205,189,148,0.08); }
 
     /* ── Editor ── */
     .editor-wrap { flex:1; display:flex; flex-direction:column; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; }
@@ -1462,6 +1540,7 @@ namespace MYSFTP
 <body>
   <div id=""top-loader""></div>
   <input type=""file"" id=""file-upload-input"" multiple style=""display:none"" onchange=""handleFileSelected(event)"">
+  <input type=""file"" id=""folder-upload-input"" webkitdirectory directory multiple style=""display:none"" onchange=""handleFolderSelected(event)"">
 
   <div id=""root"">
     <!-- Sidebar -->
@@ -1470,7 +1549,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.9 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.0 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1520,12 +1599,27 @@ namespace MYSFTP
         </section>
 
         <!-- 2. File Explorer Page -->
-        <section class=""page"" id=""p-files"">
-          <div class=""toolbar"">
+        <section class=""page"" id=""p-files"" style=""position:relative;"">
+          <div class=""dropzone-overlay"" id=""dropzone-overlay"">
+            <div class=""dropzone-icon"">📥</div>
+            <div class=""dropzone-title"">Lepaskan Berkas atau Folder di Sini</div>
+            <div class=""dropzone-sub"">Unggah otomatis ke direktori remote yang sedang dibuka</div>
+          </div>
+
+          <div class=""batch-bar"" id=""batch-bar"">
+            <span id=""batch-count"" style=""font-weight:700;color:var(--gold-light);font-size:13px;"">0 item terpilih</span>
             <div style=""display:flex;gap:8px;"">
+              <button class=""btn btn-danger btn-sm"" onclick=""deleteSelected()"">🗑 Hapus Terpilih</button>
+              <button class=""btn btn-d btn-sm"" onclick=""clearSelection()"">✕ Batal</button>
+            </div>
+          </div>
+
+          <div class=""toolbar"">
+            <div style=""display:flex;gap:8px;flex-wrap:wrap;"">
               <button class=""btn btn-d btn-sm nav-btn"" onclick=""fsUp()"">◀ Kembali</button>
               <button class=""btn btn-d btn-sm nav-btn"" onclick=""fsRefresh()"">🔄 Refresh</button>
-              <button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload dari Lokal</button>
+              <button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload File</button>
+              <button class=""btn btn-upload btn-sm"" onclick=""triggerFolderUpload()"">📁 Upload Folder</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsNew('file')"">+ File Baru</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder</button>
             </div>
@@ -1534,7 +1628,8 @@ namespace MYSFTP
           <table class=""ftbl"">
             <thead>
               <tr>
-                <th style=""width:50%"">Nama Berkas / Folder</th>
+                <th style=""width:38px;text-align:center;""><input type=""checkbox"" id=""chk-all"" class=""chk-box"" onchange=""toggleSelectAll(this.checked)""></th>
+                <th style=""width:48%"">Nama Berkas / Folder</th>
                 <th style=""width:13%"">Ukuran</th>
                 <th style=""width:12%"">Tipe</th>
                 <th style=""width:17%"">Terakhir Diubah</th>
@@ -1572,7 +1667,7 @@ namespace MYSFTP
               <div class=""chips"">
                 <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses streaming log / monitoring (SIGINT)"">🛑 Ctrl+C</button>
                 <span class=""chip"" onclick=""tSend('pm2 status')"">📊 pm2 status</span>
-                <span class=""chip"" onclick=""tStream('pm2 logs')"">📜 pm2 logs</span>
+                <span class=""chip"" onclick=""tSend('pm2 logs')"">📜 pm2 logs</span>
                 <span class=""chip"" onclick=""tSend('ls -la')"">📁 ls -la</span>
                 <span class=""chip"" onclick=""tSend('df -h')"">💾 df -h</span>
                 <span class=""chip"" onclick=""tSend('free -m')"">🧠 free -m</span>
@@ -1660,6 +1755,43 @@ namespace MYSFTP
         <div class=""modal-ft"">
           <button type=""button"" class=""btn btn-d"" onclick=""closeOv('ov-connect')"">Batal</button>
           <button type=""submit"" class=""btn btn-g"" id=""connect-btn"">🚀 Hubungkan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Custom Confirm Modal (Replaces browser default confirm) -->
+  <div class=""overlay"" id=""ov-confirm"">
+    <div class=""modal"" style=""max-width:430px;"">
+      <div class=""modal-hd"">
+        <h3 id=""conf-title"">Konfirmasi</h3>
+        <button class=""btn btn-d btn-sm"" onclick=""closeOv('ov-confirm')"">✕</button>
+      </div>
+      <div class=""modal-bd"">
+        <p id=""conf-msg"" style=""font-size:13.5px;color:var(--text);line-height:1.6;""></p>
+      </div>
+      <div class=""modal-ft"">
+        <button type=""button"" class=""btn btn-d"" onclick=""closeOv('ov-confirm')"">Batal</button>
+        <button type=""button"" class=""btn btn-danger"" id=""conf-ok-btn"">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Prompt Modal (Replaces browser default prompt) -->
+  <div class=""overlay"" id=""ov-prompt"">
+    <div class=""modal"" style=""max-width:440px;"">
+      <div class=""modal-hd"">
+        <h3 id=""prompt-title"">Input</h3>
+        <button class=""btn btn-d btn-sm"" onclick=""closeOv('ov-prompt')"">✕</button>
+      </div>
+      <form onsubmit=""event.preventDefault();submitCustomPrompt();"">
+        <div class=""modal-bd"">
+          <div class=""lbl"" id=""prompt-lbl"">Nama:</div>
+          <input type=""text"" id=""prompt-inp"" class=""inp"" autocomplete=""off"" required>
+        </div>
+        <div class=""modal-ft"">
+          <button type=""button"" class=""btn btn-d"" onclick=""closeOv('ov-prompt')"">Batal</button>
+          <button type=""submit"" class=""btn btn-g"" id=""prompt-ok-btn"">Lanjutkan</button>
         </div>
       </form>
     </div>
@@ -1840,18 +1972,19 @@ namespace MYSFTP
     }
 
     function delProfile(id) {
-      if (!confirm('Hapus profil koneksi ini?')) return;
-      profiles = profiles.filter(function(x){return x.id!==id;});
-      try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
-      renderCards();
-      toast('Profil dihapus.');
+      customConfirm('Hapus Profil Server', 'Apakah Anda yakin ingin menghapus profil server ini?', '🗑 Hapus Profil', true, function() {
+        profiles = profiles.filter(function(x){return x.id!==id;});
+        try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
+        renderCards();
+        toast('Profil dihapus.');
 
-      fetch('/api/profiles',{
-        method:'POST',
-        headers:{'Content-Type':'application/json; charset=utf-8'},
-        body:JSON.stringify(profiles)
-      }).catch(function(err) {
-        console.warn('Backend sync:', err);
+        fetch('/api/profiles',{
+          method:'POST',
+          headers:{'Content-Type':'application/json; charset=utf-8'},
+          body:JSON.stringify(profiles)
+        }).catch(function(err) {
+          console.warn('Backend sync:', err);
+        });
       });
     }
 
@@ -2049,6 +2182,122 @@ namespace MYSFTP
       fsLoad(target);
     }
 
+    var confirmCallback = null;
+    function customConfirm(title, msg, btnText, isDanger, onOk) {
+      document.getElementById('conf-title').textContent = title || 'Konfirmasi';
+      document.getElementById('conf-msg').textContent = msg || '';
+      var btn = document.getElementById('conf-ok-btn');
+      btn.textContent = btnText || 'OK';
+      btn.className = isDanger ? 'btn btn-danger' : 'btn btn-g';
+      confirmCallback = onOk;
+      document.getElementById('ov-confirm').classList.add('on');
+    }
+    document.getElementById('conf-ok-btn').onclick = function() {
+      closeOv('ov-confirm');
+      if (confirmCallback) { var cb = confirmCallback; confirmCallback = null; cb(); }
+    };
+
+    var promptCallback = null;
+    function customPrompt(title, lbl, placeholder, defVal, btnText, onOk) {
+      document.getElementById('prompt-title').textContent = title || 'Input';
+      document.getElementById('prompt-lbl').textContent = lbl || 'Nama:';
+      var inp = document.getElementById('prompt-inp');
+      inp.placeholder = placeholder || '';
+      inp.value = defVal || '';
+      document.getElementById('prompt-ok-btn').textContent = btnText || 'Simpan';
+      promptCallback = onOk;
+      document.getElementById('ov-prompt').classList.add('on');
+      setTimeout(function(){ inp.focus(); inp.select(); }, 60);
+    }
+    function submitCustomPrompt() {
+      var val = document.getElementById('prompt-inp').value.trim();
+      closeOv('ov-prompt');
+      if (promptCallback) { var cb = promptCallback; promptCallback = null; cb(val); }
+    }
+
+    var selectedPaths = [];
+
+    function updateBatchBar() {
+      var bar = document.getElementById('batch-bar');
+      var cnt = document.getElementById('batch-count');
+      var chkAll = document.getElementById('chk-all');
+      
+      if (selectedPaths.length > 0) {
+        bar.classList.add('on');
+        cnt.textContent = selectedPaths.length + ' item terpilih';
+      } else {
+        bar.classList.remove('on');
+      }
+
+      if (chkAll) {
+        chkAll.checked = fsItems.length > 0 && selectedPaths.length === fsItems.length;
+        chkAll.indeterminate = selectedPaths.length > 0 && selectedPaths.length < fsItems.length;
+      }
+    }
+
+    function toggleSelectAll(checked) {
+      selectedPaths = [];
+      if (checked) {
+        fsItems.forEach(function(f) { selectedPaths.push(f.path); });
+      }
+      document.querySelectorAll('.row-chk').forEach(function(chk) {
+        chk.checked = checked;
+        var row = chk.closest('tr');
+        if (row) row.classList.toggle('selected', checked);
+      });
+      updateBatchBar();
+    }
+
+    function toggleSelectRow(path, checked, evt) {
+      if (evt) evt.stopPropagation();
+      var idx = selectedPaths.indexOf(path);
+      if (checked && idx < 0) selectedPaths.push(path);
+      else if (!checked && idx >= 0) selectedPaths.splice(idx, 1);
+
+      document.querySelectorAll('.row-chk').forEach(function(chk) {
+        if (chk.getAttribute('data-path') === path) {
+          chk.checked = checked;
+          var row = chk.closest('tr');
+          if (row) row.classList.toggle('selected', checked);
+        }
+      });
+      updateBatchBar();
+    }
+
+    function clearSelection() {
+      selectedPaths = [];
+      document.querySelectorAll('.row-chk').forEach(function(chk) {
+        chk.checked = false;
+        var row = chk.closest('tr');
+        if (row) row.classList.remove('selected');
+      });
+      var chkAll = document.getElementById('chk-all');
+      if (chkAll) { chkAll.checked = false; chkAll.indeterminate = false; }
+      updateBatchBar();
+    }
+
+    function deleteSelected() {
+      if (!selectedPaths.length) return;
+      var count = selectedPaths.length;
+      customConfirm('Hapus ' + count + ' Item Terpilih', 'Apakah Anda yakin ingin menghapus ' + count + ' berkas/folder yang dipilih secara permanen?', '🗑 Hapus Semua (' + count + ')', true, function() {
+        showLoader(true);
+        var toDelete = selectedPaths.slice();
+        fetch('/api/fs/batch-delete', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json; charset=utf-8'},
+          body: JSON.stringify(toDelete)
+        }).then(function(r){ return r.json(); }).then(function(d) {
+          showLoader(false);
+          clearSelection();
+          fsRefresh();
+          toast('✔ ' + count + ' item berhasil dihapus!');
+        }).catch(function(err) {
+          showLoader(false);
+          toast('❌ Gagal menghapus: ' + err.message);
+        });
+      });
+    }
+
     function renderFiles() {
       var tb = document.getElementById('ftbody');
       var em = document.getElementById('empty-fs');
@@ -2056,6 +2305,7 @@ namespace MYSFTP
 
       if (!connected && !fsItems.length) {
         em.style.display = 'flex';
+        clearSelection();
         return;
       }
       em.style.display = 'none';
@@ -2068,27 +2318,41 @@ namespace MYSFTP
       fsItems.forEach(function(f) {
         var tr = document.createElement('tr');
         tr.className = 'frow';
+        var isSelected = selectedPaths.indexOf(f.path) >= 0;
+        if (isSelected) tr.classList.add('selected');
+
         var isD = f.isDirectory;
         var icon = isD ? '📁' : getFileIcon(f.name);
         var sz = isD ? '—' : fmtSize(f.size);
         var type = isD ? 'Folder' : getExt(f.name);
 
-        tr.innerHTML = '<td><div class=""fname ' + (isD?'dir':'') + '""><span>' + icon + '</span><span>' + esc(f.name) + '</span></div></td>' +
+        tr.innerHTML = '<td style=""text-align:center;"" onclick=""event.stopPropagation();"">' +
+          '<input type=""checkbox"" class=""row-chk chk-box"" data-path=""' + esc(f.path) + '"" ' + (isSelected ? 'checked' : '') + ' onchange=""toggleSelectRow(\'' + esc(f.path) + '\', this.checked, event)"">' +
+          '</td>' +
+          '<td><div class=""fname ' + (isD?'dir':'') + '""><span>' + icon + '</span><span>' + esc(f.name) + '</span></div></td>' +
           '<td class=""fmeta"">' + sz + '</td>' +
           '<td class=""fmeta"">' + type + '</td>' +
           '<td class=""fmeta"">' + esc(f.modified||'') + '</td>' +
           '<td><button class=""btn btn-danger btn-sm del-btn"" onclick=""event.stopPropagation();fsDel(\'' + esc(f.path) + '\',\'' + esc(f.name) + '\')"">🗑</button></td>';
 
-        tr.onclick = function() {
+        tr.onclick = function(e) {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
           if (isD) fsLoad(f.path);
           else edOpen(f.path, f.name);
         };
         tb.appendChild(tr);
       });
+      updateBatchBar();
     }
 
     function triggerUpload() {
       var inp = document.getElementById('file-upload-input');
+      inp.value = '';
+      inp.click();
+    }
+
+    function triggerFolderUpload() {
+      var inp = document.getElementById('folder-upload-input');
       inp.value = '';
       inp.click();
     }
@@ -2099,75 +2363,197 @@ namespace MYSFTP
       uploadFileList(files);
     }
 
-    function uploadOneFile(file) {
-      return new Promise(function(resolve) {
-        var reader = new FileReader();
-        reader.onload = function(evt) {
-          var b64 = evt.target.result.split(',')[1];
-          var remoteDest = (fsPath === '/' ? '' : fsPath) + '/' + file.name;
-          fetch('/api/fs/upload', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ path: remoteDest, data: b64 })
-          }).then(function(r){return r.json();}).then(function(res) {
-            resolve({ name: file.name, ok: !!res.success, error: res.error });
-          }).catch(function(err) {
-            resolve({ name: file.name, ok: false, error: err.message });
-          });
-        };
-        reader.onerror = function() { resolve({ name: file.name, ok: false, error: 'Gagal membaca berkas lokal' }); };
-        reader.readAsDataURL(file);
-      });
+    function handleFolderSelected(e) {
+      var files = e.target.files;
+      if (!files || !files.length) return;
+      var list = [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var relPath = f.webkitRelativePath || f.name;
+        list.push({ file: f, relativePath: relPath });
+      }
+      uploadFileListWithPaths(list);
     }
 
-    function uploadFileList(fileList) {
-      var files = Array.prototype.slice.call(fileList);
-      if (!files.length) return;
+    function handleDragOver(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (curView === 'files' && connected) {
+        document.getElementById('dropzone-overlay').classList.add('on');
+      }
+    }
+
+    function handleDragLeave(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var overlay = document.getElementById('dropzone-overlay');
+      if (e.target === overlay || !overlay.contains(e.relatedTarget)) {
+        overlay.classList.remove('on');
+      }
+    }
+
+    function handleDrop(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      document.getElementById('dropzone-overlay').classList.remove('on');
+      if (curView !== 'files' || !connected) return;
+
+      var items = e.dataTransfer && e.dataTransfer.items;
+      if (items && items.length > 0 && typeof items[0].webkitGetAsEntry === 'function') {
+        var entries = [];
+        for (var i = 0; i < items.length; i++) {
+          var entry = items[i].webkitGetAsEntry();
+          if (entry) entries.push(entry);
+        }
+        scanAndUploadEntries(entries);
+      } else if (e.dataTransfer && e.dataTransfer.files) {
+        uploadFileList(e.dataTransfer.files);
+      }
+    }
+
+    function scanAndUploadEntries(entries) {
+      var fileEntries = [];
+      var pending = 0;
+
+      function scanEntry(entry, path) {
+        path = path || '';
+        if (entry.isFile) {
+          pending++;
+          entry.file(function(file) {
+            fileEntries.push({ file: file, relativePath: (path ? path + '/' : '') + file.name });
+            pending--;
+            if (pending === 0) uploadFileListWithPaths(fileEntries);
+          }, function() {
+            pending--;
+            if (pending === 0) uploadFileListWithPaths(fileEntries);
+          });
+        } else if (entry.isDirectory) {
+          pending++;
+          var reader = entry.createReader();
+          var readNext = function() {
+            reader.readEntries(function(results) {
+              if (results.length > 0) {
+                results.forEach(function(child) {
+                  scanEntry(child, (path ? path + '/' : '') + entry.name);
+                });
+                readNext();
+              } else {
+                pending--;
+                if (pending === 0) uploadFileListWithPaths(fileEntries);
+              }
+            }, function() {
+              pending--;
+              if (pending === 0) uploadFileListWithPaths(fileEntries);
+            });
+          };
+          readNext();
+        }
+      }
+
+      if (entries.length === 0) return;
       showLoader(true);
-      toast('⚡ Mengunggah ' + files.length + ' berkas ke ' + fsPath + ' ...');
+      toast('⚡ Membaca struktur folder & berkas...');
+      entries.forEach(function(entry) { scanEntry(entry, ''); });
+    }
+
+    function uploadFileListWithPaths(list) {
+      if (!list || !list.length) return;
+      showLoader(true);
+      toast('⚡ Mengunggah ' + list.length + ' item ke ' + fsPath + ' ...');
 
       var i = 0, okCount = 0, failCount = 0;
       function next() {
-        if (i >= files.length) {
+        if (i >= list.length) {
           showLoader(false);
           fsRefresh();
-          if (failCount === 0) toast('✔ ' + okCount + ' berkas berhasil diunggah!');
+          if (failCount === 0) toast('✔ ' + okCount + ' item berhasil diunggah!');
           else toast('⚠ ' + okCount + ' berhasil, ' + failCount + ' gagal diunggah.');
           return;
         }
-        var f = files[i++];
-        uploadOneFile(f).then(function(res) {
-          if (res.ok) { okCount++; } else { failCount++; toast('❌ Gagal: ' + res.name + (res.error ? ' — ' + res.error : '')); }
+        var item = list[i++];
+        uploadOneRelativeFile(item.file, item.relativePath).then(function(res) {
+          if (res.ok) okCount++;
+          else { failCount++; toast('❌ Gagal: ' + item.relativePath); }
           next();
         });
       }
       next();
     }
 
+    function uploadOneRelativeFile(file, relPath) {
+      return new Promise(function(resolve) {
+        var reader = new FileReader();
+        reader.onload = function(evt) {
+          var b64 = evt.target.result.split(',')[1];
+          var base = fsPath === '/' ? '' : fsPath;
+          var cleanRel = relPath.replace(/^[\\\/]+/, '');
+          var remoteDest = base + '/' + cleanRel;
+          fetch('/api/fs/upload', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json; charset=utf-8'},
+            body: JSON.stringify({ path: remoteDest, data: b64 })
+          }).then(function(r){return r.json();}).then(function(res) {
+            resolve({ ok: !!res.success, error: res.error });
+          }).catch(function(err) {
+            resolve({ ok: false, error: err.message });
+          });
+        };
+        reader.onerror = function() { resolve({ ok: false, error: 'Gagal membaca berkas lokal' }); };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function uploadOneFile(file) {
+      return uploadOneRelativeFile(file, file.name);
+    }
+
+    function uploadFileList(fileList) {
+      var files = Array.prototype.slice.call(fileList);
+      if (!files.length) return;
+      var list = files.map(function(f) { return { file: f, relativePath: f.name }; });
+      uploadFileListWithPaths(list);
+    }
+
     function fsNew(type) {
-      var name = prompt(type === 'folder' ? 'Nama folder baru:' : 'Nama berkas baru:');
-      if (!name) return;
-      var fullPath = (fsPath === '/' ? '' : fsPath) + '/' + name;
-      showLoader(true);
-      fetch('/api/fs/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fullPath,type:type})})
-        .then(function(r){return r.json();})
-        .then(function(d) {
-          showLoader(false);
-          if (d.success) { fsRefresh(); toast(type==='folder'?'Folder dibuat!':'Berkas dibuat!'); }
-          else toast('Gagal: ' + (d.error||'Error'));
-        });
+      var isFolder = type === 'folder';
+      customPrompt(
+        isFolder ? 'Buat Folder Baru' : 'Buat Berkas Baru',
+        isFolder ? 'Nama folder baru:' : 'Nama berkas baru:',
+        isFolder ? 'Contoh: Project' : 'Contoh: app.js',
+        '',
+        '✨ Buat ' + (isFolder ? 'Folder' : 'Berkas'),
+        function(name) {
+          if (!name) return;
+          var fullPath = (fsPath === '/' ? '' : fsPath) + '/' + name;
+          showLoader(true);
+          fetch('/api/fs/create',{
+            method:'POST',
+            headers:{'Content-Type':'application/json; charset=utf-8'},
+            body:JSON.stringify({path:fullPath,type:type})
+          }).then(function(r){return r.json();})
+            .then(function(d) {
+              showLoader(false);
+              if (d.success) { fsRefresh(); toast(isFolder ? 'Folder dibuat!' : 'Berkas dibuat!'); }
+              else toast('Gagal: ' + (d.error||'Error'));
+            });
+        }
+      );
     }
 
     function fsDel(path, name) {
-      if (!confirm('Hapus berkas atau folder ini?')) return;
-      showLoader(true);
-      fetch('/api/fs/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
-        .then(function(r){return r.json();})
-        .then(function(d) {
-          showLoader(false);
-          if (d.success) { fsRefresh(); toast('Item dihapus.'); }
-          else toast('Gagal menghapus: ' + (d.error||'Error'));
-        });
+      customConfirm('Hapus Berkas / Folder', 'Apakah Anda yakin ingin menghapus "' + name + '" secara permanen dari server?', '🗑 Hapus', true, function() {
+        showLoader(true);
+        fetch('/api/fs/delete',{
+          method:'POST',
+          headers:{'Content-Type':'application/json; charset=utf-8'},
+          body:JSON.stringify({path:path})
+        }).then(function(r){return r.json();})
+          .then(function(d) {
+            showLoader(false);
+            if (d.success) { fsRefresh(); toast('Item dihapus.'); }
+            else toast('Gagal menghapus: ' + (d.error||'Error'));
+          });
+      });
     }
 
     function edOpen(path, name) {
@@ -2244,7 +2630,14 @@ namespace MYSFTP
         body: JSON.stringify({ command: cmd })
       }).then(function(r){ return r.json(); }).then(function(d) {
         if (d && d.output) {
-          tPrint(d.output + '\r\n');
+          var out = d.output;
+          var trimmedCmd = cmd.trim();
+          var lines = out.split('\n');
+          if (lines.length > 0 && lines[0].trim() === trimmedCmd) {
+            lines.shift();
+            out = lines.join('\n');
+          }
+          if (out) tPrint(out + '\r\n');
         }
       }).catch(function(err) {
         tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
@@ -2253,8 +2646,6 @@ namespace MYSFTP
 
     function startTermPoll() {
       stopTermPoll();
-      // Fast, lightweight poll — plain text diff only, so 120ms feels live
-      // without being heavy, similar to how Termius streams a PTY.
       termStreamPoll = setInterval(function() {
         fetch('/api/terminal/poll')
           .then(function(r){return r.json();})
@@ -2269,8 +2660,9 @@ namespace MYSFTP
     }
 
     function tBreak() {
-      fetch('/api/terminal/break',{method:'POST'});
-      toast('🛑 Ctrl+C terkirim ke sesi terminal.');
+      fetch('/api/terminal/break',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'}});
+      tPrint('\r\n\x1b[1;31m^C (Proses dihentikan)\x1b[0m\r\n');
+      toast('🛑 Ctrl+C terkirim (SIGINT).');
     }
 
     function tHistoryNav(dir) {

@@ -1,48 +1,34 @@
-# MYSFTP v1.9.9 — Perbaikan & Instalasi Dedicated Suite
+# MYSFTP v2.0.0 — Major Release: Luxury Modals, Multi-Select & Drag-Drop Folder Suite
 
-## Apa yang diperbaiki
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.0
 
-### 1. Terminal sekarang benar-benar bisa dipakai
-Sebelumnya setiap perintah di terminal membuka **koneksi SSH baru** dari nol — jadi `cd` tidak
-tersimpan, dan program interaktif (nano, htop) tidak jalan dengan benar. Sekarang terminal
-membuka **satu sesi SSH persisten** (pakai `ssh -tt`, PTY asli) yang tetap hidup selama kamu
-terhubung — persis seperti Termius. Prompt yang muncul adalah prompt asli dari server, riwayat
-perintah bisa diakses dengan ↑ / ↓, dan tombol Ctrl+C sekarang mengirim sinyal Ctrl+C asli
-(bukan memutus seluruh sesi).
+### 1. 🎨 Pop-up Bawaan Browser Diganti Modal Mewah (Luxury Glassmorphism Dialogs)
+- Tidak ada lagi pop-up bawaan browser (`127.0.0.1 says...`).
+- Semua dialog konfirmasi hapus berkas/folder, hapus profil koneksi, dan input nama berkas/folder baru kini menggunakan **Custom Luxury Glassmorphism Modal** dengan tema dark-gold yang senada dan elegan.
 
-### 2. Bukan Microsoft Edge lagi yang "kebuka"
-Ikon aplikasi sebelumnya disajikan sebagai file JPEG dengan tipe MIME yang salah, jadi Windows
-tidak mengenali ikon custom-nya dan menampilkan ikon Edge/Chrome generik di taskbar — itu sebabnya
-terasa seperti "Edge yang kebuka". Sekarang `favicon.ico` disajikan dengan tipe yang benar, dan
-ikon aplikasi (`app.ico`) juga di-embed langsung ke dalam `MYSFTP.exe` itu sendiri.
+### 2. 📁 Upload Folder & Drag-and-Drop Rekursif
+- **Tombol Dedicated "📁 Upload Folder":** Sekarang kamu bisa mengunggah seluruh folder beserta subfolder dan isinya sekaligus langsung dari PC ke server.
+- **Drag & Drop Folder:** Cukup seret (drag & drop) berkas atau folder langsung ke layar File Explorer, sistem akan otomatis membaca struktur direktori secara rekursif dan membuat direktori serta mengunggah semua file ke server VPS.
+- Tampilan visual **Dropzone Overlay** aktif secara otomatis saat file/folder diseret ke atas aplikasi.
 
-### 3. Tidak perlu buka dua kali lagi
-Sebelumnya aplikasi hanya menunggu ±1 detik sebelum membuka jendela, dan sisa file lock dari sesi
-sebelumnya bisa membuat percobaan pertama gagal diam-diam. Sekarang:
-- Menunggu server lokal benar-benar siap (sampai 15 detik, bukan ~1 detik) sebelum membuka jendela.
-- Membersihkan file lock lama sebelum membuka.
-- Kalau jendela tetap gagal terbuka di percobaan pertama, aplikasi **otomatis mencoba ulang sendiri**
-  dengan profil baru — kamu tidak perlu klik dua kali lagi.
+### 3. 🗂️ Sistem Multi-Select & Batch Delete (Hapus Sekaligus)
+- Setiap baris berkas dan folder kini dilengkapi checkbox pilihan.
+- Terdapat checkbox **"Select All"** di header tabel.
+- Dilengkapi **Batch Actions Toolbar** di bagian atas (`N item terpilih`) dengan tombol **"🗑 Hapus Terpilih"** sehingga tidak perlu lagi menghapus berkas satu per satu.
 
-### 4. Tombol "◀ Kembali" tidak glitch lagi
-Sebelumnya ada efek "flash" ke folder lama sebelum lompat ke folder baru, terasa seperti delay/
-nge-glitch. Sekarang: indikator loading jauh lebih terlihat (badge "⏳ Memuat..." + tombol
-navigasi otomatis nonaktif selagi memuat), dan tampilan tidak lagi menampilkan folder lama kalau
-memang belum ada datanya.
+### 4. 💻 SSH Termius Console Bebas Duplikasi & Responsif Ctrl+C
+- **Fix Double Echo:** Output perintah seperti `ls` atau `pm2 ls` tidak lagi terduplikasi ganda pada layar terminal.
+- **Responsive Ctrl+C (SIGINT):** Menekan tombol `🛑 Ctrl+C` atau shortcut keyboard kini langsung mengirimkan sinyal interupsi ke proses remote yang sedang berjalan (seperti `pm2 logs`, `tail -f`, atau monitoring), menghentikan streaming secara seketika dan mencetak `^C` dengan jelas.
+- Navigasi riwayat perintah (↑ / ↓) dan eksekusi instan tombol Enter tetap berjalan lancar.
 
-### 5. Upload dari lokal — sekarang bisa banyak file + drag & drop
-Tombol **📤 Upload dari Lokal** sekarang bisa memilih beberapa file sekaligus (progress per file
-ditampilkan), dan kamu juga bisa langsung **drag & drop** file dari File Explorer Windows ke area
-File Explorer di MYSFTP.
+### 5. ⚠️ Catatan Penting Setelah Instalasi Pertama
+> **Catatan Setelah Install:** Pada awal-awal peluncuran pertama kali setelah install di PC Windows, sistem SmartScreen / antivirus mungkin memerlukan waktu beberapa detik untuk memvalidasi port dan service lokal. Jika aplikasi belum langsung terhubung, cukup tutup dan buka ulang (relog) 1–2 kali agar semua service & port berjalan normal dan lancar.
 
-### 6. Instalasi seperti aplikasi besar
-`MYSFTP-Setup.exe` sekarang adalah installer sungguhan (dibuat dengan NSIS):
-- Halaman lisensi, pilih folder instalasi (bebas pilih drive mana pun, termasuk `D:\`), pilih
-  komponen (shortcut Desktop opsional).
-- Shortcut Start Menu otomatis + opsi shortcut Desktop.
-- Terdaftar rapi di **Add/Remove Programs** Windows, lengkap dengan ikon, versi, dan uninstaller.
-- Data (`connections.json`, dll) disimpan di folder instalasi itu sendiri — jadi kalau kamu pasang
-  di `D:\Apps\MYSFTP`, semua datanya juga di situ, tidak nyampur dengan `C:\`.
+---
+
+## 📦 File Rilis Resmi (Clean Single Assets):
+* 💻 **Windows PC:** `MYSFTP-v2.0.0-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.0.0.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).

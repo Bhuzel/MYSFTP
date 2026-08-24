@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ MYSFTP (v1.9.9 — Luxury Glassmorphism Edition)
+# ⚡ MYSFTP (v2.0.0 — Luxury Glassmorphism Edition)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
 *Engineered for Public Release with Luxury Dark Gold Aesthetics & High-Performance Core by **ZellRayy***
@@ -14,6 +14,11 @@
 [![Author](https://img.shields.io/badge/Author-ZellRayy-17150F?style=for-the-badge&logoColor=DED0AA)](https://t.me/BhuzelRayhan)
 
 </div>
+
+---
+
+> ⚠️ **Catatan Penting Setelah Instalasi Pertama (Windows PC):**  
+> Pada peluncuran pertama kali setelah selesai menginstal di Windows, sistem Windows SmartScreen / Antivirus mungkin membutuhkan waktu beberapa detik untuk memvalidasi port dan service lokal. Jika aplikasi belum langsung merespons atau terkoneksi, cukup tutup aplikasi dan **buka ulang (relog) 1–2 kali** agar semua port lokal dan service SSH aktif secara normal dan stabil.
 
 ---
 
@@ -43,33 +48,34 @@
 
 ---
 
-## 🌟 Key Capabilities
+## 🌟 Fitur Unggulan (v2.0.0)
 
-### 💻 1. Windows Desktop Client (`MYSFTP.exe`)
-* **Instant Startup Isolated App Window**: Membuka aplikasi secara instan pada klik pertama tanpa delay atau error.
-* **Upload File Langsung dari Lokal**: Tombol **`📤 Upload File`** memungkinkan kamu memilih berkas apapun dari PC dan mengunggahnya langsung ke folder remote server.
-* **Ultra-Fast SFTP Explorer**: Dilengkapi in-memory caching cepat dan tombol navigasi **`◀ Kembali`** anti-glitch dengan indikator loading emas di bagian atas.
-* **SSH Termius Console**: Konsol interaktif dengan styling Termius, eksekusi perintah Linux instan (`pm2 status`, `df -h`, `free -m`, `uptime`), streaming realtime untuk `pm2 logs`, serta tombol **`🛑 Ctrl+C`** untuk menghentikan proses kapan saja.
-* **Pro Code Editor**: Editor kode terintegrasi dengan pintasan **`Ctrl+S`** langsung menyimpan berkas ke server VPS remote.
-* **Clean & Secure Storage**: Profil server disimpan rapi di `connections.json` lokal tanpa data demo bawaan.
+### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.0-Setup.exe`)
+* **🎨 Luxury Glassmorphism Modals**: Tidak ada lagi dialog browser bawaan (`127.0.0.1 says...`). Semua pop-up konfirmasi dan input nama berkas kini menggunakan tema dark gold transparan yang mewah.
+* **📁 Upload Folder & Drag & Drop Rekursif**: Tombol **`📁 Upload Folder`** dan area drag & drop memungkinkan kamu menarik seluruh folder proyek dari Windows ke server VPS, otomatis membuat struktur subfolder secara rekursif.
+* **🗂️ Multi-Select & Batch Deletion**: Fitur checkbox pilihan di setiap baris dan header tabel, memudahkan kamu menghapus banyak berkas sekaligus dengan satu klik tombol **`🗑 Hapus Terpilih`**.
+* **💻 SSH Termius Console Bebas Duplikasi**: Terminal interaktif tanpa duplikasi echo, navigasi riwayat perintah (↑ / ↓), eksekusi instan tombol Enter, serta tombol **`🛑 Ctrl+C`** responsif untuk menghentikan proses log (`pm2 logs`, `tail -f`).
+* **✏️ Pro Code Editor**: Editor kode terintegrasi dengan shortcut keyboard **`Ctrl+S`** untuk menyimpan file langsung ke server remote.
+* **📦 Dedicated NSIS Installer**: Instalasi bersih ke drive manapun (misal `D:\`), Start Menu shortcut, dan terdaftar rapi di Windows Add/Remove Programs.
 
-### 📱 2. Android Mobile App (`MYSFTP.apk`)
-* **Spacious Single-Pane by Default**: Langsung membuka direktori SFTP server remote dalam tampilan layar penuh yang lapang.
-* **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto bottom-scroll, quick action dock, dan pemilihan teks bebas (*drag-and-copy*).
-* **OTA Auto Updates**: Otomatis mendeteksi rilis versi terbaru dari GitHub repository.
+### 📱 2. Android Mobile App (`MYSFTP-v2.0.0.apk`)
+* **Spacious Single-Pane Explorer**: Tampilan direktori remote yang lapang dan responsif.
+* **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto-scroll dan drag-and-copy.
+* **OTA Auto Updates**: Otomatis mendeteksi update terbaru dari GitHub repository.
 
 ---
 
 ## 🚀 Quick Start
 
 ### 🖥️ Windows PC / Laptop
-1. Unduh **`MYSFTP.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
-2. Klik 2x pada **`MYSFTP.exe`**.
-3. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
-4. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah berkas, dan membuka terminal SSH.
+1. Unduh **`MYSFTP-v2.0.0-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+2. Jalankan file installer dan selesaikan langkah instalasi.
+3. Buka **MYSFTP** dari Start Menu atau Desktop.
+4. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
+5. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah folder, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
-1. Unduh **`MYSFTP.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.0.0.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Pasang APK pada perangkat Android Anda.
 
 ---
@@ -77,8 +83,8 @@
 ## 🛠️ Automated CI/CD & Build System
 
 Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/android.yml`):
-* Setiap commit pada branch `main` atau tag `v*` akan otomatis mengompilasi APK Android dan merilis binary Windows `.exe`.
-* File unduhan langsung tersedia di [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases).
+* Setiap tag `v*` otomatis mengompilasi APK Android dan Windows Setup Installer.
+* File unduhan bersih langsung tersedia di [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases).
 
 ---
 
@@ -91,5 +97,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v1.9.9 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v2.0.0 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>
