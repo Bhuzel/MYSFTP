@@ -1,9 +1,9 @@
 <div align="center">
 
-# ⚡ MYSFTP (v1.7.0 — Luxury Glassmorphism Edition)
+# ⚡ MYSFTP (v1.8.0 — Luxury Glassmorphism Edition)
 
-**Next-Generation Multi-Platform SFTP Client & SSH Termius Console Suite**  
-*Crafted with Luxury Dark Gold Aesthetics & High-Performance Core by **ZellRayy***
+**Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
+*Engineered for Public Release with Luxury Dark Gold Aesthetics & High-Performance Core by **ZellRayy***
 
 ---
 
@@ -21,15 +21,15 @@
 
 ```css
 :root {
-  --bg-base: #07080a;
-  --bg-surface: #0e0f14;
-  --bg-card: #13151b;
-  --bg-card-hover: #1a1c24;
+  --bg-base: #060709;
+  --bg-surface: #0c0d12;
+  --bg-card: #12141a;
+  --bg-card-hover: #181b22;
   --border: rgba(255, 255, 255, 0.07);
   --border-gold: rgba(205, 189, 148, 0.35);
   --gold: #cdbd94;
   --gold-light: #f0e6cf;
-  --gold-glow: rgba(205, 189, 148, 0.2);
+  --gold-glow: rgba(205, 189, 148, 0.22);
   --text: #eae6db;
   --text-dim: #7f7c72;
   --green: #73d285;
@@ -46,11 +46,12 @@
 ## 🌟 Key Capabilities
 
 ### 💻 1. Windows Desktop Client (`MYSFTP.exe`)
-* **Standalone Window**: Berjalan dalam jendela desktop mandiri tanpa address bar atau framing browser standar.
-* **Ultra-Fast SFTP Explorer**: Dilengkapi in-memory caching cepat dan tombol navigasi **`◀ Kembali`** yang instan tanpa delay.
-* **SSH Termius Console**: Konsol interaktif dengan styling Termius, pewarnaan ANSI 16/256 warna, font *JetBrains Mono*, tombol **`🛑 Ctrl+C`** untuk menghentikan proses monitoring/logs, serta tombol pintasan cepat (`pm2 status`, `pm2 logs`, `df -h`, `free -m`, `uptime`).
+* **Instant Startup Isolated App Window**: Membuka aplikasi secara instan pada klik pertama tanpa delay atau error.
+* **Upload File Langsung dari Lokal**: Tombol **`📤 Upload File`** memungkinkan kamu memilih berkas apapun dari PC dan mengunggahnya langsung ke folder remote server.
+* **Ultra-Fast SFTP Explorer**: Dilengkapi in-memory caching cepat dan tombol navigasi **`◀ Kembali`** anti-glitch dengan indikator loading emas di bagian atas.
+* **SSH Termius Console**: Konsol interaktif dengan styling Termius, eksekusi perintah Linux instan (`pm2 status`, `df -h`, `free -m`, `uptime`), streaming realtime untuk `pm2 logs`, serta tombol **`🛑 Ctrl+C`** untuk menghentikan proses kapan saja.
 * **Pro Code Editor**: Editor kode terintegrasi dengan pintasan **`Ctrl+S`** langsung menyimpan berkas ke server VPS remote.
-* **Clean & Secure Storage**: Profil server disimpan rapi di `connections.json` lokal tanpa data demo/palsu bawaan.
+* **Clean & Secure Storage**: Profil server disimpan rapi di `connections.json` lokal tanpa data demo bawaan.
 
 ### 📱 2. Android Mobile App (`MYSFTP.apk`)
 * **Spacious Single-Pane by Default**: Langsung membuka direktori SFTP server remote dalam tampilan layar penuh yang lapang.
@@ -65,7 +66,7 @@
 1. Unduh **`MYSFTP.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Klik 2x pada **`MYSFTP.exe`**.
 3. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
-4. Klik **`🚀 Buka`** untuk mulai mengelola berkas dan membuka terminal SSH.
+4. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah berkas, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
 1. Unduh **`MYSFTP.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
@@ -90,5 +91,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v1.7.0 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v1.8.0 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>

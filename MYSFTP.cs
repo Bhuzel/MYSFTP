@@ -12,40 +12,80 @@ namespace MYSFTP
 {
     class SshManager
     {
-        private Process sshProcess;
-        private StringBuilder outputBuffer = new StringBuilder();
+        private Process activeStreamingProcess;
         private string askpassPath;
-        private string muxSocket;
         private string host;
         private int port;
         private string user;
         private string password;
         private bool connected;
-        private object lockObj = new object();
+        private object streamLock = new object();
+        private StringBuilder streamOutput = new StringBuilder();
 
         [DllImport("shell32.dll", SetLastError = true)]
         public static extern void SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
 
-        public bool IsConnected { get { return connected && sshProcess != null && !sshProcess.HasExited; } }
+        public bool IsConnected { get { return connected; } }
+        public string Host { get { return host; } }
+        public int Port { get { return port; } }
+        public string User { get { return user; } }
 
         public void Connect(string h, int p, string u, string pw)
         {
             Disconnect();
             host = h; port = p; user = u; password = pw;
 
-            muxSocket = Path.Combine(Path.GetTempPath(), "mysftp_mux_" + Guid.NewGuid().ToString("N").Substring(0, 8));
-
-            // Create askpass helper script
             askpassPath = Path.Combine(Path.GetTempPath(), "mysftp_ap_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
             string escapedPw = pw.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
                                  .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
                                  .Replace("\"", "^\"");
             File.WriteAllText(askpassPath, "@echo off\r\necho " + escapedPw + "\r\n");
 
+            connected = true;
+        }
+
+        public string RunCommand(string command, int timeoutMs = 12000)
+        {
+            if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
+
+            string apPath = CreateAskPass();
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = FindSshExe();
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -p " + port + " " + user + "@" + host + " " + command;
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.CreateNoWindow = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.StandardErrorEncoding = Encoding.UTF8;
+                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
+                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
+                psi.EnvironmentVariables["DISPLAY"] = ":0";
+
+                Process p = Process.Start(psi);
+                string stdout = p.StandardOutput.ReadToEnd();
+                string stderr = p.StandardError.ReadToEnd();
+                p.WaitForExit(timeoutMs);
+                if (!p.HasExited) try { p.Kill(); } catch { }
+
+                return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
+            }
+            finally
+            {
+                try { File.Delete(apPath); } catch { }
+            }
+        }
+
+        public void StartStreamingCommand(string command)
+        {
+            StopStreaming();
+
+            string apPath = CreateAskPass();
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = FindSshExe();
-            // Connect with PTY simulation and terminal environment
-            psi.Arguments = "-tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ServerAliveInterval=15 -p " + port + " " + user + "@" + host;
+            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -p " + port + " " + user + "@" + host + " " + command;
             psi.UseShellExecute = false;
             psi.RedirectStandardInput = true;
             psi.RedirectStandardOutput = true;
@@ -53,183 +93,118 @@ namespace MYSFTP
             psi.CreateNoWindow = true;
             psi.StandardOutputEncoding = Encoding.UTF8;
             psi.StandardErrorEncoding = Encoding.UTF8;
-            psi.EnvironmentVariables["SSH_ASKPASS"] = askpassPath;
+            psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
             psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
             psi.EnvironmentVariables["DISPLAY"] = ":0";
             psi.EnvironmentVariables["TERM"] = "xterm-256color";
 
-            lock (lockObj) { outputBuffer.Clear(); }
-            sshProcess = Process.Start(psi);
+            lock (streamLock) { streamOutput.Clear(); }
 
-            Thread tOut = new Thread(() => ReadStream(sshProcess.StandardOutput));
+            activeStreamingProcess = Process.Start(psi);
+
+            Thread tOut = new Thread(() => {
+                try {
+                    char[] buf = new char[2048];
+                    int n;
+                    while (activeStreamingProcess != null && !activeStreamingProcess.HasExited && (n = activeStreamingProcess.StandardOutput.Read(buf, 0, buf.Length)) > 0) {
+                        string s = new string(buf, 0, n);
+                        lock (streamLock) { streamOutput.Append(s); }
+                    }
+                } catch { }
+            });
             tOut.IsBackground = true;
             tOut.Start();
-            Thread tErr = new Thread(() => ReadStream(sshProcess.StandardError));
+
+            Thread tErr = new Thread(() => {
+                try {
+                    char[] buf = new char[2048];
+                    int n;
+                    while (activeStreamingProcess != null && !activeStreamingProcess.HasExited && (n = activeStreamingProcess.StandardError.Read(buf, 0, buf.Length)) > 0) {
+                        string s = new string(buf, 0, n);
+                        lock (streamLock) { streamOutput.Append(s); }
+                    }
+                } catch { }
+            });
             tErr.IsBackground = true;
             tErr.Start();
-
-            connected = true;
         }
 
-        private void ReadStream(StreamReader reader)
+        public string GetStreamOutput()
         {
-            try
+            lock (streamLock)
             {
-                char[] buf = new char[4096];
-                int n;
-                while ((n = reader.Read(buf, 0, buf.Length)) > 0)
-                {
-                    string chunk = new string(buf, 0, n);
-                    lock (lockObj) { outputBuffer.Append(chunk); }
-                }
-            }
-            catch { }
-        }
-
-        public void SendInput(string input)
-        {
-            if (IsConnected)
-            {
-                try
-                {
-                    sshProcess.StandardInput.Write(input);
-                    sshProcess.StandardInput.Flush();
-                }
-                catch { }
-            }
-        }
-
-        public void SendCtrlC()
-        {
-            if (IsConnected)
-            {
-                try
-                {
-                    // Send ASCII 3 (ETX / Ctrl+C)
-                    sshProcess.StandardInput.Write('\x03');
-                    sshProcess.StandardInput.Flush();
-                }
-                catch { }
-            }
-        }
-
-        public string GetOutput()
-        {
-            lock (lockObj)
-            {
-                string result = outputBuffer.ToString();
-                outputBuffer.Clear();
+                string result = streamOutput.ToString();
+                streamOutput.Clear();
                 return result;
             }
         }
 
-        public void Disconnect()
+        public void StopStreaming()
         {
-            connected = false;
-            if (sshProcess != null && !sshProcess.HasExited)
+            if (activeStreamingProcess != null && !activeStreamingProcess.HasExited)
             {
-                try { sshProcess.StandardInput.WriteLine("exit"); } catch { }
-                Thread.Sleep(150);
-                try { if (!sshProcess.HasExited) sshProcess.Kill(); } catch { }
+                try { activeStreamingProcess.Kill(); } catch { }
             }
-            sshProcess = null;
-            CleanAskpass();
+            activeStreamingProcess = null;
         }
 
-        private void CleanAskpass()
+        public string WriteRemoteBytes(string remotePath, byte[] data)
         {
-            if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
-            {
-                try { File.Delete(askpassPath); } catch { }
-            }
-            askpassPath = null;
-        }
+            if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
 
-        // Run a fast one-shot SSH command
-        public string RunCommand(string command, int timeoutMs = 8000)
-        {
-            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(password))
-                return "Not connected";
-
-            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
-            string escapedPw = password.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
-                                       .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
-                                       .Replace("\"", "^\"");
-            File.WriteAllText(apPath, "@echo off\r\necho " + escapedPw + "\r\n");
-
+            string b64 = Convert.ToBase64String(data);
+            string apPath = CreateAskPass();
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -p " + port + " " + user + "@" + host + " " + command;
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.CreateNoWindow = true;
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
-                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-                psi.EnvironmentVariables["DISPLAY"] = ":0";
-
-                Process p = Process.Start(psi);
-                string stdout = p.StandardOutput.ReadToEnd();
-                string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(timeoutMs);
-                if (!p.HasExited) try { p.Kill(); } catch { }
-
-                return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
-            }
-            finally
-            {
-                try { File.Delete(apPath); } catch { }
-            }
-        }
-
-        public string RunCommandWithStdin(string command, string stdinContent, int timeoutMs = 12000)
-        {
-            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(password))
-                return "Not connected";
-
-            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
-            string escapedPw = password.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
-                                       .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
-                                       .Replace("\"", "^\"");
-            File.WriteAllText(apPath, "@echo off\r\necho " + escapedPw + "\r\n");
-
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"base64 -d > " + EscapeShell(remotePath) + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.CreateNoWindow = true;
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
                 psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
                 psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
                 psi.EnvironmentVariables["DISPLAY"] = ":0";
 
                 Process p = Process.Start(psi);
-                using (StreamWriter sw = new StreamWriter(p.StandardInput.BaseStream, Encoding.UTF8))
+                using (StreamWriter sw = new StreamWriter(p.StandardInput.BaseStream, Encoding.ASCII))
                 {
-                    sw.Write(stdinContent);
+                    sw.Write(b64);
                     sw.Flush();
                 }
-                string stdout = p.StandardOutput.ReadToEnd();
                 string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(timeoutMs);
+                p.WaitForExit(15000);
                 if (!p.HasExited) try { p.Kill(); } catch { }
 
-                return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
+                return stderr;
             }
             finally
             {
                 try { File.Delete(apPath); } catch { }
             }
+        }
+
+        private string CreateAskPass()
+        {
+            string p = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
+            string escapedPw = (password ?? "").Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
+                                              .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
+                                              .Replace("\"", "^\"");
+            File.WriteAllText(p, "@echo off\r\necho " + escapedPw + "\r\n");
+            return p;
+        }
+
+        public void Disconnect()
+        {
+            connected = false;
+            StopStreaming();
+            if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
+            {
+                try { File.Delete(askpassPath); } catch { }
+            }
+            askpassPath = null;
         }
 
         private static string FindSshExe()
@@ -244,6 +219,12 @@ namespace MYSFTP
                 if (File.Exists(p)) return p;
             }
             return "ssh.exe";
+        }
+
+        private static string EscapeShell(string s)
+        {
+            if (s == null) return "";
+            return s.Replace("'", "'\\''");
         }
     }
 
@@ -268,13 +249,14 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.App.v170");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v180");
             }
             catch { }
 
             dataDir = AppDomain.CurrentDomain.BaseDirectory;
             profilesFile = Path.Combine(dataDir, "connections.json");
 
+            // Find a free TCP port
             TcpListener tcp = new TcpListener(IPAddress.Loopback, 0);
             tcp.Start();
             port = ((IPEndPoint)tcp.LocalEndpoint).Port;
@@ -288,6 +270,10 @@ namespace MYSFTP
             serverThread.IsBackground = true;
             serverThread.Start();
 
+            // Wait until local web server is fully listening and responding
+            WaitForServerReady("http://127.0.0.1:" + port + "/");
+
+            // Launch standalone isolated app window
             LaunchNativeAppWindow("http://127.0.0.1:" + port + "/");
 
             if (browserProcess != null)
@@ -299,6 +285,23 @@ namespace MYSFTP
             try { listener.Stop(); } catch { }
         }
 
+        private static void WaitForServerReady(string url)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                    req.Timeout = 400;
+                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
+                    {
+                        if (res.StatusCode == HttpStatusCode.OK) break;
+                    }
+                }
+                catch { Thread.Sleep(50); }
+            }
+        }
+
         private static void LaunchNativeAppWindow(string url)
         {
             string edgePath = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
@@ -307,13 +310,13 @@ namespace MYSFTP
             if (!File.Exists(chromePath)) chromePath = @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
 
             string browser = File.Exists(edgePath) ? edgePath : (File.Exists(chromePath) ? chromePath : null);
-            string userProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MYSFTP_Client_Data");
+            string userProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MYSFTP_Desktop_Profile");
 
             if (browser != null)
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client\" --window-size=1320,860 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v180\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run";
                 psi.UseShellExecute = false;
                 browserProcess = Process.Start(psi);
             }
@@ -403,19 +406,16 @@ namespace MYSFTP
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost) && !string.IsNullOrEmpty(activePassword))
                     {
                         sshManager.Connect(activeHost, activePort, activeUser, activePassword);
-                        Thread.Sleep(1200);
+                        string test = sshManager.RunCommand("echo MYSFTP_OK", 6000);
 
-                        string testOut = sshManager.GetOutput();
-                        bool hasError = testOut.Contains("Permission denied") || testOut.Contains("Connection refused") || testOut.Contains("No route to host");
-
-                        if (hasError)
+                        if (test.Contains("MYSFTP_OK"))
                         {
-                            sshManager.Disconnect();
-                            SendJson(res, "{\"success\":false,\"error\":\"" + EscapeJson(testOut) + "\"}");
+                            SendJson(res, "{\"success\":true,\"protocol\":\"SFTP\",\"name\":\"" + EscapeJson(activeName) + "\"}");
                         }
                         else
                         {
-                            SendJson(res, "{\"success\":true,\"protocol\":\"SFTP\",\"name\":\"" + EscapeJson(activeName) + "\",\"banner\":\"" + EscapeJson(testOut) + "\"}");
+                            sshManager.Disconnect();
+                            SendJson(res, "{\"success\":false,\"error\":\"" + EscapeJson(test.Trim()) + "\"}");
                         }
                     }
                     else if (activeProtocol == "LOCAL")
@@ -438,26 +438,54 @@ namespace MYSFTP
                     bool conn = sshManager.IsConnected;
                     SendJson(res, "{\"connected\":" + (conn ? "true" : "false") + ",\"protocol\":\"" + EscapeJson(activeProtocol ?? "") + "\",\"name\":\"" + EscapeJson(activeName ?? "") + "\",\"host\":\"" + EscapeJson(activeHost ?? "") + "\"}");
                 }
-                else if (path == "/api/terminal/output")
-                {
-                    string output = sshManager.GetOutput();
-                    SendJson(res, "{\"output\":\"" + EscapeJson(output) + "\"}");
-                }
-                else if (path == "/api/terminal/input" && req.HttpMethod == "POST")
+                else if (path == "/api/terminal/exec" && req.HttpMethod == "POST")
                 {
                     string body = ReadBody(req);
-                    string input = ExtractVal(body, "input");
-                    sshManager.SendInput(input + "\n");
-                    SendJson(res, "{\"success\":true}");
+                    string cmd = ExtractVal(body, "command");
+                    bool stream = ExtractVal(body, "stream") == "true";
+
+                    if (activeProtocol == "SFTP" && sshManager.IsConnected)
+                    {
+                        if (stream)
+                        {
+                            sshManager.StartStreamingCommand(cmd);
+                            SendJson(res, "{\"success\":true,\"streaming\":true}");
+                        }
+                        else
+                        {
+                            string outStr = sshManager.RunCommand("\"" + cmd.Replace("\"", "\\\"") + " 2>&1\"", 15000);
+                            SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\"}");
+                        }
+                    }
+                    else
+                    {
+                        // Local command execution
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + cmd)
+                        {
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        };
+                        Process p = Process.Start(psi);
+                        string outStr = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+                        p.WaitForExit(5000);
+                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\"}");
+                    }
+                }
+                else if (path == "/api/terminal/poll")
+                {
+                    string stream = sshManager.GetStreamOutput();
+                    SendJson(res, "{\"output\":\"" + EscapeJson(stream) + "\"}");
                 }
                 else if (path == "/api/terminal/break" && req.HttpMethod == "POST")
                 {
-                    sshManager.SendCtrlC();
+                    sshManager.StopStreaming();
                     SendJson(res, "{\"success\":true}");
                 }
                 else if (path == "/api/fs/list")
                 {
-                    string dir = req.QueryString["path"] ?? "/";
+                    string dir = req.QueryString["path"] ?? "/root";
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
                     {
                         SendJson(res, ListRemoteDirFast(dir));
@@ -491,6 +519,30 @@ namespace MYSFTP
                     else
                     {
                         SendJson(res, WriteLocalFile(fp, content));
+                    }
+                }
+                else if (path == "/api/fs/upload" && req.HttpMethod == "POST")
+                {
+                    string body = ReadBody(req);
+                    string fp = ExtractVal(body, "path");
+                    string b64 = ExtractVal(body, "data");
+                    byte[] bytes = Convert.FromBase64String(b64);
+
+                    if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
+                    {
+                        string err = sshManager.WriteRemoteBytes(fp, bytes);
+                        if (string.IsNullOrEmpty(err) || !err.Contains("Permission denied"))
+                            SendJson(res, "{\"success\":true,\"message\":\"Berkas berhasil diunggah!\"}");
+                        else
+                            SendJson(res, "{\"success\":false,\"error\":\"" + EscapeJson(err) + "\"}");
+                    }
+                    else
+                    {
+                        string localPath = fp.Replace('/', '\\');
+                        string dir = Path.GetDirectoryName(localPath);
+                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                        File.WriteAllBytes(localPath, bytes);
+                        SendJson(res, "{\"success\":true,\"message\":\"Berkas berhasil disimpan!\"}");
                     }
                 }
                 else if (path == "/api/fs/delete" && req.HttpMethod == "POST")
@@ -551,7 +603,6 @@ namespace MYSFTP
             }
         }
 
-        // Fast remote SFTP listing
         private static string ListRemoteDirFast(string dir)
         {
             try
@@ -560,8 +611,7 @@ namespace MYSFTP
                 dir = dir.TrimEnd('/');
                 if (string.IsNullOrEmpty(dir)) dir = "/";
 
-                // Ultra fast parser: ls -la with ISO dates
-                string raw = sshManager.RunCommand("\"ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"", 6000);
+                string raw = sshManager.RunCommand("\"ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"", 7000);
                 if (raw.Contains("No such file") || raw.Contains("cannot access") || raw.Contains("Permission denied"))
                 {
                     return "{\"success\":false,\"error\":\"" + EscapeJson(raw.Trim()) + "\"}";
@@ -626,7 +676,8 @@ namespace MYSFTP
         {
             try
             {
-                sshManager.RunCommandWithStdin("\"cat > " + EscapeShell(path) + "\"", content, 10000);
+                byte[] bytes = Encoding.UTF8.GetBytes(content);
+                sshManager.WriteRemoteBytes(path, bytes);
                 return "{\"success\":true,\"message\":\"Berkas berhasil disimpan ke server!\"}";
             }
             catch (Exception ex)
@@ -856,29 +907,29 @@ namespace MYSFTP
             return s.Replace("'", "'\\''");
         }
 
-        #region Embedded HTML UI
+        #region Embedded Luxury HTML UI
         private const string HtmlUi = @"<!DOCTYPE html>
 <html lang=""id"">
 <head>
   <meta charset=""UTF-8"">
   <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-  <title>MYSFTP v1.7.0 — Luxury SFTP & SSH Suite</title>
+  <title>MYSFTP v1.8.0 — Desktop Suite</title>
   <link rel=""icon"" type=""image/jpeg"" href=""/icon.jpg"">
   <link rel=""preconnect"" href=""https://fonts.googleapis.com"">
   <link rel=""preconnect"" href=""https://fonts.gstatic.com"" crossorigin>
   <link href=""https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800;900&display=swap"" rel=""stylesheet"">
   <style>
     :root {
-      --bg-base: #07080a;
-      --bg-surface: #0e0f14;
-      --bg-card: #13151b;
-      --bg-card-hover: #1a1c24;
-      --bg-input: #090a0d;
+      --bg-base: #060709;
+      --bg-surface: #0c0d12;
+      --bg-card: #12141a;
+      --bg-card-hover: #181b22;
+      --bg-input: #08090c;
       --border: rgba(255,255,255,0.07);
       --border-gold: rgba(205,189,148,0.35);
       --gold: #cdbd94;
       --gold-light: #f0e6cf;
-      --gold-glow: rgba(205,189,148,0.2);
+      --gold-glow: rgba(205,189,148,0.22);
       --text: #eae6db;
       --text-dim: #7f7c72;
       --green: #73d285;
@@ -897,12 +948,16 @@ namespace MYSFTP
     ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.12); border-radius:3px; }
     ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.25); }
 
-    #root { display:flex; height:100vh; width:100vw; background:radial-gradient(circle at 85% 15%, rgba(205,189,148,0.04), transparent 50%), var(--bg-base); }
+    #root { display:flex; height:100vh; width:100vw; background:radial-gradient(circle at 85% 15%, rgba(205,189,148,0.04), transparent 50%), var(--bg-base); position:relative; }
+
+    /* ── Progress Bar ── */
+    #top-loader { position:absolute; top:0; left:0; width:100%; height:3px; background:linear-gradient(90deg, transparent, var(--gold), var(--gold-light), transparent); background-size:200% 100%; z-index:99999; display:none; animation:loadMove 1.2s infinite linear; }
+    @keyframes loadMove { 0%{background-position:200% 0;} 100%{background-position:-200% 0;} }
 
     /* ── Sidebar ── */
-    .sb { width:228px; background:rgba(14,15,20,0.95); backdrop-filter:blur(24px); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; z-index:10; }
-    .sb-brand { height:60px; padding:0 18px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
-    .sb-logo { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#cdbd94,#96865c); color:#111; display:flex; align-items:center; justify-content:center; font-family:'Outfit'; font-weight:900; font-size:16px; box-shadow:0 4px 12px rgba(205,189,148,0.3); }
+    .sb { width:230px; background:rgba(12,13,18,0.96); backdrop-filter:blur(24px); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; z-index:10; }
+    .sb-brand { height:62px; padding:0 18px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
+    .sb-logo { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#cdbd94,#96865c); color:#111; display:flex; align-items:center; justify-content:center; font-family:'Outfit'; font-weight:900; font-size:16px; box-shadow:0 4px 14px rgba(205,189,148,0.3); }
     .sb-info { display:flex; flex-direction:column; }
     .sb-name { font-family:'Outfit'; font-weight:800; font-size:15px; color:var(--gold-light); letter-spacing:.5px; }
     .sb-ver { font-size:9px; color:var(--text-dim); font-weight:700; text-transform:uppercase; letter-spacing:.6px; }
@@ -927,11 +982,13 @@ namespace MYSFTP
     .crumb { background:var(--bg-card); border:1px solid var(--border); padding:4px 10px; border-radius:6px; cursor:pointer; transition:border-color .15s; }
     .crumb:hover { border-color:var(--gold); }
 
-    .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:7px 15px; font-size:12.5px; font-weight:700; border-radius:var(--r-sm); border:none; cursor:pointer; font-family:'Inter'; transition:all .18s; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:7px 15px; font-size:12.5px; font-weight:700; border-radius:var(--r-sm); border:none; cursor:pointer; font-family:'Inter'; transition:all .18s; user-select:none; }
     .btn-g { background:linear-gradient(135deg,#cdbd94,#b5a477); color:#111; box-shadow:0 3px 12px rgba(205,189,148,.25); }
     .btn-g:hover { filter:brightness(1.1); transform:translateY(-1px); }
     .btn-d { background:var(--bg-card); color:var(--text); border:1px solid var(--border); }
     .btn-d:hover { background:var(--bg-card-hover); border-color:rgba(255,255,255,.18); }
+    .btn-upload { background:rgba(205,189,148,0.15); color:var(--gold-light); border:1px solid var(--border-gold); }
+    .btn-upload:hover { background:var(--gold); color:#111; }
     .btn-danger { background:rgba(224,108,117,0.12); color:var(--red); border:1px solid rgba(224,108,117,0.25); }
     .btn-danger:hover { background:rgba(224,108,117,0.22); }
     .btn-break { background:rgba(224,108,117,0.18); color:#f28b93; border:1px solid var(--red); font-family:'JetBrains Mono'; font-weight:700; }
@@ -980,14 +1037,14 @@ namespace MYSFTP
     .code-area { flex:1; width:100%; background:transparent; color:#eae6db; caret-color:var(--gold); font-family:'JetBrains Mono',monospace; font-size:13px; line-height:1.65; padding:16px; border:none; outline:none; resize:none; white-space:pre; tab-size:2; }
 
     /* ── Termius Terminal ── */
-    .term-wrap { flex:1; display:flex; flex-direction:column; background:#07080c; border:1px solid var(--border-gold); border-radius:var(--r-md); overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
-    .term-bar { height:44px; background:#0f1118; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 14px; flex-shrink:0; }
+    .term-wrap { flex:1; display:flex; flex-direction:column; background:#06070a; border:1px solid var(--border-gold); border-radius:var(--r-md); overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
+    .term-bar { height:44px; background:#0d0e14; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 14px; flex-shrink:0; }
     .term-title { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:12.5px; color:var(--gold-light); display:flex; align-items:center; gap:8px; }
     .chips { display:flex; gap:6px; overflow-x:auto; flex-shrink:0; }
     .chip { background:rgba(255,255,255,.06); border:1px solid var(--border); border-radius:6px; padding:4px 9px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--gold-light); cursor:pointer; transition:all .14s; white-space:nowrap; }
     .chip:hover { background:var(--gold); color:#111; font-weight:700; }
-    .term-screen { flex:1; padding:16px; font-family:'JetBrains Mono','Cascadia Code',monospace; font-size:12.5px; line-height:1.45; letter-spacing:0px; color:#d6d3c9; overflow-y:auto; white-space:pre-wrap; word-break:break-all; user-select:text; background:#07080c; }
-    .term-input-row { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#0f1118; border-top:1px solid var(--border); flex-shrink:0; }
+    .term-screen { flex:1; padding:16px; font-family:'JetBrains Mono','Cascadia Code',monospace; font-size:12.5px; line-height:1.45; letter-spacing:0px; color:#d6d3c9; overflow-y:auto; white-space:pre-wrap; word-break:break-all; user-select:text; background:#06070a; }
+    .term-input-row { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#0d0e14; border-top:1px solid var(--border); flex-shrink:0; }
     .term-prompt { font-family:'JetBrains Mono',monospace; font-weight:700; color:var(--green); font-size:12.5px; white-space:nowrap; }
     .term-inp { flex:1; background:transparent; border:none; outline:none; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--gold-light); caret-color:var(--gold); }
 
@@ -1011,6 +1068,9 @@ namespace MYSFTP
   </style>
 </head>
 <body>
+  <div id=""top-loader""></div>
+  <input type=""file"" id=""file-upload-input"" multiple style=""display:none"" onchange=""handleFileSelected(event)"">
+
   <div id=""root"">
     <!-- Sidebar -->
     <aside class=""sb"">
@@ -1018,7 +1078,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.7.0 • Luxury Gold</span>
+          <span class=""sb-ver"">v1.8.0 • Desktop Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1070,8 +1130,9 @@ namespace MYSFTP
             <div style=""display:flex;gap:8px;"">
               <button class=""btn btn-d btn-sm"" onclick=""fsUp()"">◀ Kembali</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsRefresh()"">🔄 Refresh</button>
+              <button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload File</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsNew('file')"">+ File Baru</button>
-              <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder Baru</button>
+              <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder</button>
             </div>
             <span id=""fs-info"" class=""fmeta""></span>
           </div>
@@ -1114,9 +1175,9 @@ namespace MYSFTP
                 <span>💻 SSH Termius Console</span>
               </div>
               <div class=""chips"">
-                <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses yang sedang berjalan (SIGINT)"">🛑 Ctrl+C</button>
+                <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses streaming log / monitoring (SIGINT)"">🛑 Ctrl+C</button>
                 <span class=""chip"" onclick=""tSend('pm2 status')"">📊 pm2 status</span>
-                <span class=""chip"" onclick=""tSend('pm2 logs')"">📜 pm2 logs</span>
+                <span class=""chip"" onclick=""tStream('pm2 logs')"">📜 pm2 logs</span>
                 <span class=""chip"" onclick=""tSend('ls -la')"">📁 ls -la</span>
                 <span class=""chip"" onclick=""tSend('df -h')"">💾 df -h</span>
                 <span class=""chip"" onclick=""tSend('free -m')"">🧠 free -m</span>
@@ -1127,7 +1188,7 @@ namespace MYSFTP
             <div class=""term-screen"" id=""tscreen""></div>
             <div class=""term-input-row"">
               <span class=""term-prompt"" id=""tprompt"">root@server:~#</span>
-              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah Linux di sini..."" autocomplete=""off"">
+              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah Linux di sini... (contoh: pm2 status, ls -la, htop)"" autocomplete=""off"">
               <button class=""btn btn-g btn-sm"" onclick=""tExec()"">Kirim</button>
             </div>
           </div>
@@ -1219,8 +1280,9 @@ namespace MYSFTP
     var fsPath = '/root';
     var fsItems = [];
     var fsCache = {};
+    var isNavigating = false;
     var edFile = null;
-    var termPoll = null;
+    var termStreamPoll = null;
 
     window.onload = function() {
       loadProfiles();
@@ -1240,6 +1302,10 @@ namespace MYSFTP
       });
     };
 
+    function showLoader(show) {
+      document.getElementById('top-loader').style.display = show ? 'block' : 'none';
+    }
+
     function go(v) {
       curView = v;
       document.querySelectorAll('.sb-btn').forEach(function(b) { b.classList.remove('on'); });
@@ -1257,6 +1323,7 @@ namespace MYSFTP
         acts.innerHTML = '<button class=""btn btn-g btn-sm"" onclick=""openModal()"">+ Tambah</button>';
       } else if (v === 'files') {
         cr.innerHTML = '<span class=""crumb"">📁 ' + esc(fsPath) + '</span>';
+        acts.innerHTML = '<button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload File</button>';
       } else if (v === 'editor') {
         cr.innerHTML = '<span class=""crumb"">✏️ ' + esc(edFile || 'Pro Code Editor') + '</span>';
         acts.innerHTML = '<button class=""btn btn-g btn-sm"" onclick=""edSave()"">💾 Simpan</button>';
@@ -1395,6 +1462,7 @@ namespace MYSFTP
       var btn = document.getElementById('connect-btn');
       btn.innerHTML = '⏳ Menghubungkan...';
       btn.disabled = true;
+      showLoader(true);
 
       fetch('/api/connect', {
         method: 'POST',
@@ -1410,6 +1478,7 @@ namespace MYSFTP
       }).then(function(r){return r.json();}).then(function(res) {
         btn.innerHTML = '🚀 Hubungkan';
         btn.disabled = false;
+        showLoader(false);
 
         if (res.success) {
           p.password = pw;
@@ -1428,16 +1497,16 @@ namespace MYSFTP
           renderCards();
           go('files');
           fsLoad(p.protocol === 'LOCAL' ? '/' : '/root');
-          startTermPoll();
           toast('Berhasil terhubung ke ' + p.name + '!');
         } else {
           var errEl = document.getElementById('connect-error');
-          errEl.textContent = '❌ Gagal terhubung: ' + (res.error || 'Periksa username & password');
+          errEl.textContent = '❌ Gagal: ' + (res.error || 'Periksa username & password');
           errEl.style.display = 'block';
         }
       }).catch(function(err) {
         btn.innerHTML = '🚀 Hubungkan';
         btn.disabled = false;
+        showLoader(false);
         document.getElementById('connect-error').textContent = '❌ Kesalahan: ' + err.message;
         document.getElementById('connect-error').style.display = 'block';
       });
@@ -1460,10 +1529,13 @@ namespace MYSFTP
       });
     }
 
-    // Fast cached file loader
+    // ── File Explorer with Debounced Caching ──
     function fsLoad(path) {
+      if (isNavigating) return;
       if (!path) path = '/root';
-      
+      isNavigating = true;
+      showLoader(true);
+
       // Instant cache render
       if (fsCache[path]) {
         fsPath = path;
@@ -1474,6 +1546,8 @@ namespace MYSFTP
       fetch('/api/fs/list?path=' + encodeURIComponent(path))
         .then(function(r){return r.json();})
         .then(function(d) {
+          isNavigating = false;
+          showLoader(false);
           if (d.success) {
             fsPath = d.currentPath;
             fsItems = d.items || [];
@@ -1483,6 +1557,8 @@ namespace MYSFTP
             toast('❌ Gagal: ' + (d.error || 'Folder tidak dapat diakses'));
           }
         }).catch(function(err) {
+          isNavigating = false;
+          showLoader(false);
           toast('❌ Error: ' + err.message);
         });
     }
@@ -1493,11 +1569,11 @@ namespace MYSFTP
     }
 
     function fsUp() {
-      var p = fsPath;
-      if (p === '/' || !p) return;
-      var idx = p.lastIndexOf('/');
-      if (idx <= 0) fsLoad('/');
-      else fsLoad(p.substring(0, idx));
+      if (isNavigating) return;
+      if (fsPath === '/' || !fsPath) return;
+      var idx = fsPath.lastIndexOf('/');
+      var target = idx <= 0 ? '/' : fsPath.substring(0, idx);
+      fsLoad(target);
     }
 
     function renderFiles() {
@@ -1538,13 +1614,54 @@ namespace MYSFTP
       });
     }
 
+    function triggerUpload() {
+      var inp = document.getElementById('file-upload-input');
+      inp.value = '';
+      inp.click();
+    }
+
+    function handleFileSelected(e) {
+      var files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      var file = files[0];
+      toast('⚡ Mengunggah berkas: ' + file.name + '...');
+      showLoader(true);
+
+      var reader = new FileReader();
+      reader.onload = function(evt) {
+        var b64 = evt.target.result.split(',')[1];
+        var remoteDest = (fsPath === '/' ? '' : fsPath) + '/' + file.name;
+
+        fetch('/api/fs/upload', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ path: remoteDest, data: b64 })
+        }).then(function(r){return r.json();}).then(function(res) {
+          showLoader(false);
+          if (res.success) {
+            toast('✔ Berkas ' + file.name + ' berhasil diunggah!');
+            fsRefresh();
+          } else {
+            toast('❌ Gagal upload: ' + (res.error || 'Unknown error'));
+          }
+        }).catch(function(err) {
+          showLoader(false);
+          toast('❌ Upload error: ' + err.message);
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
     function fsNew(type) {
       var name = prompt(type === 'folder' ? 'Nama folder baru:' : 'Nama berkas baru:');
       if (!name) return;
-      var fullPath = fsPath.replace(/\/$/,'') + '/' + name;
+      var fullPath = (fsPath === '/' ? '' : fsPath) + '/' + name;
+      showLoader(true);
       fetch('/api/fs/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fullPath,type:type})})
         .then(function(r){return r.json();})
         .then(function(d) {
+          showLoader(false);
           if (d.success) { fsRefresh(); toast(type==='folder'?'Folder dibuat!':'Berkas dibuat!'); }
           else toast('Gagal: ' + (d.error||'Error'));
         });
@@ -1552,9 +1669,11 @@ namespace MYSFTP
 
     function fsDel(path, name) {
       if (!confirm('Hapus berkas atau folder ini?')) return;
+      showLoader(true);
       fetch('/api/fs/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(function(r){return r.json();})
         .then(function(d) {
+          showLoader(false);
           if (d.success) { fsRefresh(); toast('Item dihapus.'); }
           else toast('Gagal menghapus: ' + (d.error||'Error'));
         });
@@ -1565,9 +1684,11 @@ namespace MYSFTP
       go('editor');
       document.getElementById('ed-tab').textContent = '📄 ' + (name || path.split('/').pop());
       document.getElementById('ed-area').value = '// Memuat berkas...';
+      showLoader(true);
       fetch('/api/fs/read?path=' + encodeURIComponent(path))
         .then(function(r){return r.json();})
         .then(function(d) {
+          showLoader(false);
           if (d.success) {
             document.getElementById('ed-area').value = d.content || '';
           } else {
@@ -1579,36 +1700,28 @@ namespace MYSFTP
     function edSave() {
       if (!edFile) { toast('Tidak ada berkas yang terbuka.'); return; }
       var content = document.getElementById('ed-area').value;
+      showLoader(true);
       fetch('/api/fs/write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:edFile,content:content})})
         .then(function(r){return r.json();})
         .then(function(d) {
+          showLoader(false);
           if (d.success) toast('✔ Berkas berhasil disimpan ke server!');
           else toast('Gagal menyimpan: ' + (d.error||'Error'));
         });
     }
 
     // ── SSH Termius Terminal Engine ──
-    function startTermPoll() {
-      stopTermPoll();
-      termPoll = setInterval(function() {
-        fetch('/api/terminal/output')
-          .then(function(r){return r.json();})
-          .then(function(d) {
-            if (d.output) tPrint(d.output);
-          });
-      }, 250);
-    }
-
-    function stopTermPoll() {
-      if (termPoll) { clearInterval(termPoll); termPoll = null; }
-    }
-
     function tSend(cmd) {
       document.getElementById('tinp').value = cmd;
       tExec();
     }
 
-    function tExec() {
+    function tStream(cmd) {
+      document.getElementById('tinp').value = cmd;
+      tExec(true);
+    }
+
+    function tExec(isStream) {
       var inp = document.getElementById('tinp');
       var cmd = inp.value.trim();
       if (!cmd) return;
@@ -1617,20 +1730,52 @@ namespace MYSFTP
       if (cmd === 'clear') { tClear(); return; }
 
       if (!connected) {
-        tPrint('\r\n[!] Belum terhubung ke server. Buka tab Profil Server lalu klik Hubungkan.\r\n');
+        tPrint('\r\n\x1b[31m[!] Belum terhubung ke server. Buka tab Profil Server lalu klik Hubungkan.\x1b[0m\r\n');
         return;
       }
 
-      fetch('/api/terminal/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:cmd})});
+      tPrint('\r\n\x1b[32m' + (connProfile ? connProfile.username + '@' + connProfile.host : 'root@server') + '\x1b[0m:\x1b[34m~#\x1b[0m \x1b[1m' + cmd + '\x1b[0m\r\n');
+      showLoader(true);
+
+      fetch('/api/terminal/exec', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ command: cmd, stream: isStream || false })
+      }).then(function(r){return r.json();}).then(function(res) {
+        showLoader(false);
+        if (res.streaming) {
+          startTermPoll();
+        } else if (res.output) {
+          tPrint(res.output + '\r\n');
+        }
+      }).catch(function(err) {
+        showLoader(false);
+        tPrint('\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
+      });
+    }
+
+    function startTermPoll() {
+      stopTermPoll();
+      termStreamPoll = setInterval(function() {
+        fetch('/api/terminal/poll')
+          .then(function(r){return r.json();})
+          .then(function(d) {
+            if (d.output) tPrint(d.output);
+          });
+      }, 300);
+    }
+
+    function stopTermPoll() {
+      if (termStreamPoll) { clearInterval(termStreamPoll); termStreamPoll = null; }
     }
 
     function tBreak() {
-      if (!connected) return;
+      stopTermPoll();
       fetch('/api/terminal/break',{method:'POST'});
+      tPrint('\r\n\x1b[33m^C [Process Interrupted]\x1b[0m\r\n');
       toast('🛑 Signal SIGINT (Ctrl+C) terkirim.');
     }
 
-    // Full ANSI and Box Drawing Parser
     function tPrint(txt) {
       var box = document.getElementById('tscreen');
       var html = parseAnsi(txt);
@@ -1640,14 +1785,11 @@ namespace MYSFTP
 
     function parseAnsi(str) {
       if (!str) return '';
-      // Escape HTML chars
       var s = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       
-      // Clean terminal cursor escapes
       s = s.replace(/\x1b\[\?25[hl]/g, '')
            .replace(/\x1b\[[0-9;]*[HfABCDJK]/g, '');
 
-      // ANSI Color Codes
       s = s.replace(/\x1b\[0m/g, '</span>')
            .replace(/\x1b\[1m/g, '<span style=""font-weight:700;"">')
            .replace(/\x1b\[2m/g, '<span style=""opacity:0.6;"">')

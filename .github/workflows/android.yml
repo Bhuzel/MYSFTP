@@ -41,45 +41,45 @@ jobs:
       run: |
         mkdir -p build-artifacts
         cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.7.0.apk
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.8.0.apk
         if [ -f "MYSFTP.exe" ]; then
           cp MYSFTP.exe build-artifacts/MYSFTP.exe
-          cp MYSFTP.exe build-artifacts/MYSFTP-v1.7.0.exe
+          cp MYSFTP.exe build-artifacts/MYSFTP-v1.8.0.exe
         fi
 
     - name: Upload APK Artifact (Actions Tab)
       uses: actions/upload-artifact@v4
       with:
-        name: MYSFTP-v1.7.0-Build
+        name: MYSFTP-v1.8.0-Build
         path: build-artifacts/
 
     - name: Create or Update GitHub Release
       if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.7.0' }}
-        name: "MYSFTP v1.7.0 (Luxury Termius & Ultra-Fast SFTP Edition)"
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.8.0' }}
+        name: "MYSFTP v1.8.0 (Public Pro Edition — Real Termius & Local File Upload)"
         body: |
-          ## 🌟 MYSFTP v1.7.0 — Luxury Termius & Ultra-Fast SFTP Edition by ZellRayy
+          ## 🌟 MYSFTP v1.8.0 — Public Pro Edition by ZellRayy
 
-          ### ✨ Pembaruan Utama v1.7.0:
-          * 💻 **Native App Window Isolated Mode**: `MYSFTP.exe` berjalan dalam mode aplikasi mandiri (*standalone window*) tanpa toolbar browser atau framing Edge biasa.
-          * ⚡ **Ultra-Fast & Smooth Remote Browsing**: File explorer kini dilengkapi *smart memory cache* dan penanganan error yang kuat. Navigasi folder tidak lagi delay atau reconnect berulang.
-          * ◀ **Tombol Navigasi Diperbarui**: Tombol direktori induk kini bertuliskan **`◀ Kembali`** agar lebih intuitif dan rapi.
-          * 💻 **SSH Termius Console (Full ANSI & Box Drawing)**:
-            * Tampilan konsol Termius dengan font *JetBrains Mono*, warna ANSI 16/256 warna, dan rendering karakter tabel (`pm2 ls`, `htop`, `df -h`) yang lurus rapi.
-            * Tombol **`🛑 Ctrl+C (Break)`** dan pintasan keyboard `Ctrl+C` untuk langsung menghentikan proses log/monitoring (`pm2 logs`, `ping`, `top`).
-          * 📝 **Pro Code Editor**: Editor kode terintegrasi dengan pintasan `Ctrl+S` untuk menyimpan langsung ke server.
+          ### ✨ Pembaruan Utama v1.8.0:
+          * 💻 **Instant Standalone Window Startup**: Proses inisialisasi server lokal kini tersinkronisasi 100% sebelum jendela aplikasi dibuka, memastikan aplikasi langsung terbuka lancar pada klik pertama tanpa error.
+          * 📤 **Fitur Unggah Berkas Lokal (Upload File)**: Tersedia tombol **`📤 Upload File`** di toolbar File Explorer untuk memilih berkas dari laptop/PC dan mengunggahnya langsung ke folder remote server VPS.
+          * 💻 **SSH Termius Console Penuh**:
+            * Eksekusi perintah Linux instan (`pm2 status`, `ls -la`, `df -h`, `free -m`, `htop`, dll).
+            * Dukungan streaming realtime untuk `pm2 logs` dengan tombol **`🛑 Ctrl+C`** dan shortcut keyboard untuk menghentikan proses kapan saja.
+          * ⚡ **Anti-Glitch Debounced Navigation**: Navigasi tombol **`◀ Kembali`** dan folder kini dilengkapi *navigation lock & top progress loader*, menghilangkan bug double-click atau delay.
+          * 📝 **Pro Code Editor**: Terintegrasi langsung dengan shortcut `Ctrl+S`.
 
           ### 📦 File Unduhan Resmi:
-          * 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.7.0.exe`).
-          * 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.7.0.apk`).
+          * 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.8.0.exe`).
+          * 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.8.0.apk`).
         draft: false
         prerelease: false
         files: |
           build-artifacts/MYSFTP.apk
-          build-artifacts/MYSFTP-v1.7.0.apk
+          build-artifacts/MYSFTP-v1.8.0.apk
           build-artifacts/MYSFTP.exe
-          build-artifacts/MYSFTP-v1.7.0.exe
+          build-artifacts/MYSFTP-v1.8.0.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
