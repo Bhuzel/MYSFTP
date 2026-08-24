@@ -347,7 +347,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v180");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v190");
             }
             catch { }
 
@@ -460,7 +460,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v180\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v190\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -1271,7 +1271,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.8.0 • Desktop Suite</span>
+          <span class=""sb-ver"">v1.9.0 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">

@@ -41,42 +41,45 @@ jobs:
       run: |
         mkdir -p build-artifacts
         cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.8.0.apk
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.9.0.apk
         if [ -f "MYSFTP.exe" ]; then
           cp MYSFTP.exe build-artifacts/MYSFTP.exe
-          cp MYSFTP.exe build-artifacts/MYSFTP-v1.8.0.exe
+          cp MYSFTP.exe build-artifacts/MYSFTP-v1.9.0.exe
         fi
         if [ -f "MYSFTP-Setup.exe" ]; then
           cp MYSFTP-Setup.exe build-artifacts/MYSFTP-Setup.exe
+          cp MYSFTP-Setup.exe build-artifacts/MYSFTP-v1.9.0-Setup.exe
         fi
 
     - name: Upload APK Artifact (Actions Tab)
       uses: actions/upload-artifact@v4
       with:
-        name: MYSFTP-v1.8.0-Build
+        name: MYSFTP-v1.9.0-Build
         path: build-artifacts/
 
     - name: Create or Update GitHub Release
       if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.8.0' }}
-        name: "MYSFTP v1.8.0 (Public Pro Edition — Real Termius & Local File Upload)"
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.9.0' }}
+        name: "MYSFTP v1.9.0 (Dedicated Suite — Persistent PTY & Multi-File Upload)"
         body: |
-          ## 🌟 MYSFTP v1.8.0 — Public Pro Edition by ZellRayy
+          ## 🌟 MYSFTP v1.9.0 — Dedicated Suite by ZellRayy
 
-          ### ✨ Pembaruan Utama v1.8.0:
-          * 💻 **Instant Standalone Window Startup**: Proses inisialisasi server lokal kini tersinkronisasi 100% sebelum jendela aplikasi dibuka, memastikan aplikasi langsung terbuka lancar pada klik pertama tanpa error.
-          * 📤 **Fitur Unggah Berkas Lokal (Upload File)**: Tersedia tombol **`📤 Upload File`** di toolbar File Explorer untuk memilih berkas dari laptop/PC dan mengunggahnya langsung ke folder remote server VPS.
-          * 💻 **SSH Termius Console Penuh**:
-            * Eksekusi perintah Linux instan (`pm2 status`, `ls -la`, `df -h`, `free -m`, `htop`, dll).
-            * Dukungan streaming realtime untuk `pm2 logs` dengan tombol **`🛑 Ctrl+C`** dan shortcut keyboard untuk menghentikan proses kapan saja.
+          ### ✨ Pembaruan Utama v1.9.0:
+          * 💻 **Instant Standalone Window Startup**: Proses inisialisasi server lokal tersinkronisasi 100% sebelum jendela aplikasi dibuka, memastikan aplikasi langsung terbuka lancar pada klik pertama tanpa error.
+          * 📤 **Fitur Unggah Berkas Multi-File Queue**: Tersedia tombol **`📤 Upload File`** di toolbar File Explorer untuk memilih dan mengunggah banyak berkas sekaligus dari PC langsung ke server VPS remote.
+          * 💻 **SSH Termius Console Penuh (Persistent PTY)**:
+            * Sesi shell SSH interaktif persisten (`ssh -tt` PTY asli) dengan streaming output cepat (120ms polling).
+            * Dukungan riwayat perintah keyboard (↑ / ↓ Arrow Keys) dan tombol **`🛑 Ctrl+C`** interrupt.
           * ⚡ **Anti-Glitch Debounced Navigation**: Navigasi tombol **`◀ Kembali`** dan folder kini dilengkapi *navigation lock & top progress loader*, menghilangkan bug double-click atau delay.
+          * 📦 **Windows Installer Package**: Dilengkapi installer NSIS (`MYSFTP-Setup.exe`) untuk instalasi aplikasi ke drive C:/D: dengan Start Menu & Desktop shortcut.
           * 📝 **Pro Code Editor**: Terintegrasi langsung dengan shortcut `Ctrl+S`.
 
           ### 📦 File Unduhan Resmi:
-          * 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.8.0.exe`).
-          * 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.8.0.apk`).
+          * 💻 **Windows PC (Installer):** Unduh `MYSFTP-Setup.exe` (atau `MYSFTP-v1.9.0-Setup.exe`).
+          * 💻 **Windows PC (Portable):** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.9.0.exe`).
+          * 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.9.0.apk`).
         draft: false
         prerelease: false
         files: |
