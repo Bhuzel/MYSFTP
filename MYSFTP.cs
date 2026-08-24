@@ -259,6 +259,20 @@ namespace MYSFTP
             interactiveStdin = null;
         }
 
+        public void BreakInteractive()
+        {
+            try
+            {
+                if (IsInteractiveAlive)
+                {
+                    try { interactiveStdin.Write("\x03\n"); interactiveStdin.Flush(); } catch { }
+                }
+                StopInteractiveShell();
+                StartInteractiveShell();
+            }
+            catch { }
+        }
+
         public string WriteRemoteBytes(string remotePath, byte[] data)
         {
             if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
@@ -855,10 +869,7 @@ namespace MYSFTP
                 }
                 else if (path == "/api/terminal/break" && req.HttpMethod == "POST")
                 {
-                    // Send a real Ctrl+C (0x03) down the PTY so the remote foreground
-                    // process (tail -f, pm2 logs, a stuck script) is interrupted without
-                    // killing the whole SSH session, just like a real terminal.
-                    sshManager.SendInteractiveRaw((char)3);
+                    sshManager.BreakInteractive();
                     SendJson(res, "{\"success\":true}");
                 }
                 else if (path == "/api/fs/list")
@@ -1479,10 +1490,12 @@ namespace MYSFTP
     .empty-text { font-size:14px; color:var(--text-dim); text-align:center; max-width:340px; line-height:1.6; }
 
     /* ── File Explorer ── */
-    .toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; background:var(--bg-card); padding:8px 14px; border-radius:var(--r-sm); border:1px solid var(--border); }
-    .ftbl { width:100%; border-collapse:collapse; background:var(--bg-card); border-radius:var(--r-md); overflow:hidden; border:1px solid var(--border); }
-    .ftbl th { text-align:left; padding:11px 16px; font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-dim); border-bottom:1px solid var(--border); background:rgba(0,0,0,.25); }
-    .ftbl td { padding:11px 16px; border-bottom:1px solid rgba(255,255,255,.025); font-size:13px; }
+    .toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; background:var(--bg-card); padding:8px 14px; border-radius:var(--r-sm); border:1px solid var(--border); flex-shrink:0; }
+    .ftbl-wrap { flex:1; overflow-y:auto; overflow-x:auto; min-height:0; border-radius:var(--r-md); border:1px solid var(--border); background:var(--bg-card); position:relative; }
+    .ftbl { width:100%; border-collapse:collapse; background:transparent; }
+    .ftbl thead { position:sticky; top:0; z-index:10; background:#0e1017; }
+    .ftbl th { text-align:left; padding:11px 16px; font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-dim); border-bottom:1px solid var(--border); background:#0e1017; }
+    .ftbl td { padding:11px 16px; border-bottom:1px solid rgba(255,255,255,.03); font-size:13px; }
     .frow { cursor:pointer; transition:background .12s; }
     .frow:hover { background:var(--bg-card-hover); }
     .fname { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--text); }
@@ -1491,7 +1504,7 @@ namespace MYSFTP
     .frow .del-btn { opacity:0; transition:opacity .15s; }
     .frow:hover .del-btn { opacity:1; }
     .chk-box { width:15px; height:15px; accent-color:var(--gold); cursor:pointer; vertical-align:middle; }
-    .batch-bar { display:none; align-items:center; justify-content:space-between; background:rgba(205,189,148,0.1); border:1px solid var(--border-gold); padding:9px 16px; border-radius:var(--r-sm); margin-bottom:12px; animation:tIn .2s ease; }
+    .batch-bar { display:none; align-items:center; justify-content:space-between; background:rgba(205,189,148,0.1); border:1px solid var(--border-gold); padding:9px 16px; border-radius:var(--r-sm); margin-bottom:12px; animation:tIn .2s ease; flex-shrink:0; }
     .batch-bar.on { display:flex; }
     .dropzone-overlay { position:absolute; inset:0; background:rgba(6,7,9,0.88); backdrop-filter:blur(8px); border:2px dashed var(--gold); border-radius:var(--r-md); display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; z-index:90; pointer-events:none; }
     .dropzone-overlay.on { display:flex; }
@@ -1599,7 +1612,7 @@ namespace MYSFTP
         </section>
 
         <!-- 2. File Explorer Page -->
-        <section class=""page"" id=""p-files"" style=""position:relative;"">
+        <section class=""page"" id=""p-files"">
           <div class=""dropzone-overlay"" id=""dropzone-overlay"">
             <div class=""dropzone-icon"">📥</div>
             <div class=""dropzone-title"">Lepaskan Berkas atau Folder di Sini</div>
@@ -1625,19 +1638,23 @@ namespace MYSFTP
             </div>
             <span id=""fs-info"" class=""fmeta""></span>
           </div>
-          <table class=""ftbl"">
-            <thead>
-              <tr>
-                <th style=""width:38px;text-align:center;""><input type=""checkbox"" id=""chk-all"" class=""chk-box"" onchange=""toggleSelectAll(this.checked)""></th>
-                <th style=""width:48%"">Nama Berkas / Folder</th>
-                <th style=""width:13%"">Ukuran</th>
-                <th style=""width:12%"">Tipe</th>
-                <th style=""width:17%"">Terakhir Diubah</th>
-                <th style=""width:8%"">Aksi</th>
-              </tr>
-            </thead>
-            <tbody id=""ftbody""></tbody>
-          </table>
+
+          <div class=""ftbl-wrap"">
+            <table class=""ftbl"">
+              <thead>
+                <tr>
+                  <th style=""width:38px;text-align:center;""><input type=""checkbox"" id=""chk-all"" class=""chk-box"" onchange=""toggleSelectAll(this.checked)""></th>
+                  <th style=""width:48%"">Nama Berkas / Folder</th>
+                  <th style=""width:13%"">Ukuran</th>
+                  <th style=""width:12%"">Tipe</th>
+                  <th style=""width:17%"">Terakhir Diubah</th>
+                  <th style=""width:8%"">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id=""ftbody""></tbody>
+            </table>
+          </div>
+
           <div class=""empty-state"" id=""empty-fs"" style=""display:none;"">
             <div class=""empty-icon"">📂</div>
             <div class=""empty-text"">Silakan hubungkan ke server di tab <strong>Profil Server</strong> terlebih dahulu.</div>
@@ -2621,23 +2638,13 @@ namespace MYSFTP
       termHistory.push(cmd);
       termHistPos = termHistory.length;
 
-      var promptTxt = (document.getElementById('tprompt').textContent || 'root@server:~#') + ' ';
-      tPrint('\r\n\x1b[1;32m' + promptTxt + '\x1b[0m\x1b[1;37m' + cmd + '\x1b[0m\r\n');
-
       fetch('/api/terminal/exec', {
         method: 'POST',
         headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify({ command: cmd })
       }).then(function(r){ return r.json(); }).then(function(d) {
         if (d && d.output) {
-          var out = d.output;
-          var trimmedCmd = cmd.trim();
-          var lines = out.split('\n');
-          if (lines.length > 0 && lines[0].trim() === trimmedCmd) {
-            lines.shift();
-            out = lines.join('\n');
-          }
-          if (out) tPrint(out + '\r\n');
+          tPrint(d.output + '\r\n');
         }
       }).catch(function(err) {
         tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
