@@ -79,10 +79,15 @@ jobs:
       - name: Stage Installer Payload
         shell: pwsh
         run: |
+          # The .nsi script pulls everything (exe, icon, image, AND the
+          # license text shown on the install wizard's license page) from
+          # installer\files\ — every file it references there must exist,
+          # or makensis aborts with "open failed".
           New-Item -ItemType Directory -Force -Path "installer\files" | Out-Null
           Copy-Item MYSFTP.exe "installer\files\MYSFTP.exe" -Force
           Copy-Item app.ico "installer\files\app.ico" -Force
           Copy-Item Icon.jpg "installer\files\Icon.jpg" -Force
+          Copy-Item "installer\LICENSE.txt" "installer\files\LICENSE.txt" -Force
 
       - name: Build MYSFTP-Setup.exe with NSIS
         shell: pwsh
