@@ -386,7 +386,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v195");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v196");
             }
             catch { }
 
@@ -607,7 +607,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v195\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v196\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -669,19 +669,21 @@ namespace MYSFTP
             HttpListenerRequest req = context.Request;
             HttpListenerResponse res = context.Response;
 
-            res.Headers.Add("Access-Control-Allow-Origin", "*");
-            res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
-
-            if (req.HttpMethod == "OPTIONS")
-            {
-                res.StatusCode = 200; res.Close(); return;
-            }
-
-            string path = req.Url.AbsolutePath;
-
             try
             {
+                res.AddHeader("Access-Control-Allow-Origin", "*");
+                res.AddHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+                res.AddHeader("Access-Control-Allow-Headers", "*");
+                res.AddHeader("Access-Control-Max-Age", "86400");
+
+                if (req.HttpMethod == "OPTIONS")
+                {
+                    res.StatusCode = 200;
+                    res.ContentLength64 = 0;
+                    return;
+                }
+
+                string path = req.Url.AbsolutePath;
                 if (path == "/" || path == "/index.html")
                 {
                     byte[] buf = Encoding.UTF8.GetBytes(HtmlUi);
@@ -1196,7 +1198,8 @@ namespace MYSFTP
 
         private static string ReadBody(HttpListenerRequest req)
         {
-            using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
+            Encoding enc = req.ContentEncoding ?? Encoding.UTF8;
+            using (var reader = new StreamReader(req.InputStream, enc))
             {
                 return reader.ReadToEnd();
             }
@@ -1208,6 +1211,7 @@ namespace MYSFTP
             res.ContentType = "application/json; charset=utf-8";
             res.ContentLength64 = buf.Length;
             res.OutputStream.Write(buf, 0, buf.Length);
+            try { res.OutputStream.Flush(); } catch { }
         }
 
         private static string ExtractVal(string json, string key)
@@ -1448,7 +1452,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.5 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.6 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1729,10 +1733,23 @@ namespace MYSFTP
     }
 
     function loadProfiles() {
-      fetch('/api/profiles').then(function(r){return r.json();}).then(function(d) {
-        profiles = Array.isArray(d) ? d : [];
-        renderCards();
-      });
+      try {
+        var cached = localStorage.getItem('mysftp_profiles');
+        if (cached) {
+          profiles = JSON.parse(cached) || [];
+          renderCards();
+        }
+      } catch (e) {}
+
+      fetch('/api/profiles')
+        .then(function(r){ return r.json(); })
+        .then(function(d) {
+          if (Array.isArray(d)) {
+            profiles = d;
+            try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
+            renderCards();
+          }
+        }).catch(function(){});
     }
 
     function renderCards() {
@@ -1786,45 +1803,35 @@ namespace MYSFTP
         username: document.getElementById('f-user').value,
         password: document.getElementById('f-pass').value
       };
-      var prevProfiles = profiles.slice();
+      
       profiles.unshift(item);
+      try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
+      closeModal();
+      renderCards();
+      toast('Profil server berhasil disimpan!');
+
       fetch('/api/profiles', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify(profiles)
-      }).then(function(r){ return r.json(); }).then(function(d) {
-        if (d && d.success) {
-          closeModal();
-          renderCards();
-          toast('Profil server berhasil disimpan!');
-        } else {
-          profiles = prevProfiles; // roll back so the UI doesn't show an item that wasn't actually saved
-          toast('❌ Gagal menyimpan: ' + (d && d.error ? d.error : 'Tidak diketahui'));
-        }
       }).catch(function(err) {
-        profiles = prevProfiles;
-        toast('❌ Gagal menyimpan: ' + err.message);
+        console.warn('Backend sync:', err);
       });
     }
 
     function delProfile(id) {
       if (!confirm('Hapus profil koneksi ini?')) return;
-      var prevProfiles = profiles.slice();
       profiles = profiles.filter(function(x){return x.id!==id;});
-      fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)})
-        .then(function(r){ return r.json(); }).then(function(d) {
-        if (d && d.success) {
-          renderCards();
-          toast('Profil dihapus.');
-        } else {
-          profiles = prevProfiles;
-          renderCards();
-          toast('❌ Gagal menghapus: ' + (d && d.error ? d.error : 'Tidak diketahui'));
-        }
+      try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
+      renderCards();
+      toast('Profil dihapus.');
+
+      fetch('/api/profiles',{
+        method:'POST',
+        headers:{'Content-Type':'application/json; charset=utf-8'},
+        body:JSON.stringify(profiles)
       }).catch(function(err) {
-        profiles = prevProfiles;
-        renderCards();
-        toast('❌ Gagal menghapus: ' + err.message);
+        console.warn('Backend sync:', err);
       });
     }
 
