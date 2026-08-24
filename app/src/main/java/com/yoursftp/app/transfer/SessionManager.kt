@@ -19,7 +19,18 @@ object SessionManager {
     private const val SESSION_TIMEOUT_MS = 30 * 60 * 1000L // 30 Menit Keep-Alive
 
     @Volatile
+    var client: FileClient? = null
+        private set
+
+    @Volatile
     var editingClient: FileClient? = null
+
+    fun set(client: FileClient) {
+        this.client = client
+    }
+
+    fun require(): FileClient =
+        editingClient ?: client ?: sessionCache.values.firstOrNull()?.client ?: throw IllegalStateException("Tidak ada sesi aktif")
 
     /**
      * Mengambil sesi aktif dari cache jika ada dan masih valid (< 30 menit),
@@ -30,6 +41,7 @@ object SessionManager {
         val cached = sessionCache[conn.id]
         if (cached != null && cached.client.isConnected && (System.currentTimeMillis() - cached.lastAccessTime < SESSION_TIMEOUT_MS)) {
             cached.lastAccessTime = System.currentTimeMillis()
+            this.client = cached.client
             return cached.client
         }
 
@@ -37,6 +49,7 @@ object SessionManager {
         val newClient = FileClientFactory.create(context, conn)
         newClient.connect()
         sessionCache[conn.id] = CachedSession(newClient, System.currentTimeMillis())
+        this.client = newClient
         return newClient
     }
 
@@ -56,6 +69,7 @@ object SessionManager {
 
     fun disconnect(connectionId: Long) {
         val session = sessionCache.remove(connectionId)
+        if (client == session?.client) client = null
         runCatching { session?.client?.disconnect() }
     }
 
@@ -64,6 +78,7 @@ object SessionManager {
             runCatching { session.client.disconnect() }
         }
         sessionCache.clear()
+        client = null
         editingClient = null
     }
 
@@ -73,6 +88,7 @@ object SessionManager {
         while (iterator.hasNext()) {
             val entry = iterator.next()
             if (now - entry.value.lastAccessTime > SESSION_TIMEOUT_MS || !entry.value.client.isConnected) {
+                if (client == entry.value.client) client = null
                 runCatching { entry.value.client.disconnect() }
                 iterator.remove()
             }
