@@ -40,7 +40,6 @@ jobs:
       - name: Stage APK Artifact
         run: |
           mkdir -p build-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
           cp app/build/outputs/apk/debug/app-debug.apk "build-artifacts/MYSFTP-${{ github.ref_name }}.apk"
 
       - name: Upload APK Artifact
@@ -100,9 +99,6 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build-artifacts" | Out-Null
-          Copy-Item MYSFTP.exe "build-artifacts\MYSFTP.exe" -Force
-          Copy-Item MYSFTP.exe "build-artifacts\MYSFTP-${{ github.ref_name }}.exe" -Force
-          Copy-Item "installer\MYSFTP-Setup.exe" "build-artifacts\MYSFTP-Setup.exe" -Force
           Copy-Item "installer\MYSFTP-Setup.exe" "build-artifacts\MYSFTP-${{ github.ref_name }}-Setup.exe" -Force
 
       - name: Upload Windows Artifacts
@@ -143,12 +139,11 @@ jobs:
           body: |
             ## 🌟 MYSFTP ${{ github.ref_name }} — Dedicated Suite by ZellRayy
 
-            Dibangun otomatis dari source `MYSFTP.cs` + proyek Android lewat GitHub Actions — bukan binary yang di-upload manual.
+            Dibangun otomatis dari source `MYSFTP.cs` + proyek Android lewat GitHub Actions — rilis binary resmi multi-platform.
 
             ### 📦 File Unduhan Resmi:
-            * 💻 **Windows PC (disarankan):** Unduh `MYSFTP-Setup.exe` — installer, cukup file ini saja, tidak perlu source/zip lain.
-            * 💻 **Windows PC (portable, tanpa install):** Unduh `MYSFTP.exe`.
-            * 📱 **HP Android:** Unduh `MYSFTP.apk`.
+            * 💻 **Windows PC (Installer):** Unduh `MYSFTP-${{ github.ref_name }}-Setup.exe` — installer langsung pakai dengan desktop shortcut dan drive kustom.
+            * 📱 **HP Android:** Unduh `MYSFTP-${{ github.ref_name }}.apk`.
           draft: false
           prerelease: false
           files: |
