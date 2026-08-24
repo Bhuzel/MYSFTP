@@ -437,71 +437,98 @@ private fun ConnectionCard(
             containerColor = MaterialTheme.colorScheme.surface
         ),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    val isLiveSession = SessionManager.getActive(conn.id) != null
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onConnect() },
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF19191B)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2B2B2E))
     ) {
         Column(
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier.padding(18.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = conn.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f, fill = false)
-                )
+                ) {
+                    if (isLiveSession) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF7FBF8F))
+                        )
+                    }
+                    Text(
+                        text = conn.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFD9D4C7),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 Spacer(Modifier.width(8.dp))
 
                 val badgeColor = when (conn.protocol) {
-                    Protocol.SFTP -> MaterialTheme.colorScheme.primary
-                    Protocol.FTP -> Color(0xFFF97316) // Vibrant Orange
-                    Protocol.FTPS -> Color(0xFF10B981) // Emerald Green
-                    Protocol.S3 -> Color(0xFF8B5CF6) // Royal Purple/S3
+                    Protocol.SFTP -> Color(0xFFCDBD94) // Luxury Gold
+                    Protocol.FTP -> Color(0xFF61AFEF)  // Sky Blue
+                    Protocol.FTPS -> Color(0xFF7FBF8F) // Soft Emerald
+                    Protocol.S3 -> Color(0xFFE5C07B)   // Amber
                 }
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(badgeColor.copy(alpha = 0.15f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeColor.copy(alpha = 0.12f))
+                        .border(0.5.dp, badgeColor.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
                         text = conn.protocol.name,
                         color = badgeColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.ExtraBold
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
                     )
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
-            // Info rows with responsive truncation to prevent text overflow
+            // Info rows
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier.weight(1.2f, fill = false)
                 ) {
                     Icon(
                         Icons.Default.Dns,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(14.dp)
+                        tint = Color(0xFF8B877C),
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
-                        text = conn.host,
+                        text = "${conn.host}:${conn.port}",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF8B877C),
+                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -509,63 +536,77 @@ private fun ConnectionCard(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     modifier = Modifier.weight(0.8f, fill = false)
                 ) {
                     Icon(
                         Icons.Default.Person,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(14.dp)
+                        tint = Color(0xFF8B877C),
+                        modifier = Modifier.size(13.dp)
                     )
                     Text(
                         text = conn.username.ifBlank { "anonymous" },
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Color(0xFF8B877C),
+                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(color = Color(0xFF1F1F21))
 
             Spacer(Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                if (conn.protocol == Protocol.SFTP) {
-                    IconButton(onClick = onOpenTerminal, modifier = Modifier.size(36.dp)) {
+                if (isLiveSession) {
+                    Text(
+                        text = "● Sesi Aktif",
+                        fontSize = 11.sp,
+                        color = Color(0xFF7FBF8F),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                } else {
+                    Spacer(Modifier.width(1.dp))
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (conn.protocol == Protocol.SFTP) {
+                        IconButton(onClick = onOpenTerminal, modifier = Modifier.size(34.dp)) {
+                            Icon(
+                                Icons.Default.Terminal,
+                                contentDescription = "SSH Terminal",
+                                tint = Color(0xFFCDBD94),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    IconButton(onClick = onEdit, modifier = Modifier.size(34.dp)) {
                         Icon(
-                            Icons.Default.Terminal,
-                            contentDescription = "SSH Terminal",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = Color(0xFF8B877C),
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
-                }
-                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.Edit,
-                        contentDescription = "Edit",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
-                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Hapus",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onDelete, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Hapus",
+                            tint = Color(0xFFE06C75),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }

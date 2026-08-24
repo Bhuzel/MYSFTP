@@ -185,7 +185,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     } else {
                         val conn = repo.getById(connectionId)
                             ?: throw IllegalStateException("Koneksi tidak ditemukan")
-                        FileClientFactory.create(getApplication<Application>(), conn).apply { connect() }
+                        SessionManager.getOrCreate(getApplication<Application>(), conn)
                     }
                 }
 

@@ -342,7 +342,7 @@ fun BrowserScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { vm.disconnect(); onBack() }) {
+                    IconButton(onClick = { onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali")
                     }
                 },
@@ -408,16 +408,10 @@ fun BrowserScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     // Left Pane (Tab 1)
-                    val leftBorder = if (activeTab == 1) {
-                        Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
-                    } else {
-                        Modifier.border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                    }
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .then(leftBorder)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(MaterialTheme.colorScheme.surface)
                     ) {
                         FilePane(
@@ -472,19 +466,13 @@ fun BrowserScreen(
                         )
                     }
 
-                    Spacer(Modifier.width(3.dp))
+                    Spacer(Modifier.width(6.dp))
 
                     // Right Pane (Tab 2)
-                    val rightBorder = if (activeTab == 2) {
-                        Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
-                    } else {
-                        Modifier.border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                    }
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .then(rightBorder)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(MaterialTheme.colorScheme.surface)
                     ) {
                         FilePane(
@@ -567,8 +555,7 @@ fun BrowserScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .weight(1f)
-                        .border(1.5.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surface)
                 ) {
                     if (activeTab == 1) {
