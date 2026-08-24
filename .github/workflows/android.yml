@@ -1,0 +1,73 @@
+name: MYSFTP Android CI & Auto Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Release MYSFTP APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Diperlukan untuk membuat release dan upload APK
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        cache: 'gradle'
+
+    - name: Grant Execute Permission to Gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
+
+    - name: Rename and Prepare APK
+      run: |
+        mkdir -p build-artifacts
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.0.0.apk
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MYSFTP-APK
+        path: build-artifacts/MYSFTP.apk
+
+    # Membuat atau memperbarui rilis GitHub secara otomatis (OTA update)
+    - name: Create or Update GitHub Release
+      if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          TAG_NAME="${{ github.ref_name }}"
+          RELEASE_TITLE="MYSFTP Release $TAG_NAME"
+          PRERELEASE_FLAG=""
+        else
+          TAG_NAME="v1.0.0"
+          RELEASE_TITLE="MYSFTP v1.0.0 (Official Release)"
+          PRERELEASE_FLAG=""
+          
+          # Hapus rilis & tag lama jika ada agar selalu fresh
+          gh release delete "$TAG_NAME" --cleanup-tag --yes || true
+        fi
+        
+        # Buat rilis baru dan unggah APK untuk OTA update
+        gh release create "$TAG_NAME" \
+          --title "$RELEASE_TITLE" \
+          $PRERELEASE_FLAG \
+          --notes "🌟 **MYSFTP v1.0.0 — Luxury Dark Edition** by ZellRayy. Rilis otomatis via GitHub Actions. Fitur: Dual-Pane File Manager, In-App Code Editor, Terminal SSH VT100, Database Viewer." \
+          build-artifacts/MYSFTP.apk \
+          build-artifacts/MYSFTP-v1.0.0.apk
