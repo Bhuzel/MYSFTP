@@ -148,6 +148,103 @@ namespace MYSFTP
             activeStreamingProcess = null;
         }
 
+        // ── Persistent interactive shell (real Termius-style session) ──
+        private Process interactiveProcess;
+        private StreamWriter interactiveStdin;
+        private StringBuilder interactiveBuffer = new StringBuilder();
+        private object interactiveLock = new object();
+
+        public bool IsInteractiveAlive
+        {
+            get { return interactiveProcess != null && !interactiveProcess.HasExited; }
+        }
+
+        public void StartInteractiveShell()
+        {
+            StopInteractiveShell();
+            if (!connected || string.IsNullOrEmpty(host)) return;
+
+            string apPath = CreateAskPass();
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = FindSshExe();
+            // -tt forces a real remote PTY so the remote shell itself echoes input,
+            // shows the real prompt, and interactive tools (nano/htop/etc.) work properly.
+            psi.Arguments = "-tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p " + port + " " + user + "@" + host;
+            psi.UseShellExecute = false;
+            psi.RedirectStandardInput = true;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
+            psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
+            psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
+            psi.EnvironmentVariables["DISPLAY"] = ":0";
+            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+
+            lock (interactiveLock) { interactiveBuffer.Clear(); }
+
+            interactiveProcess = Process.Start(psi);
+            interactiveStdin = interactiveProcess.StandardInput;
+
+            Thread tOut = new Thread(() => {
+                try {
+                    char[] buf = new char[4096];
+                    int n;
+                    while (interactiveProcess != null && !interactiveProcess.HasExited && (n = interactiveProcess.StandardOutput.Read(buf, 0, buf.Length)) > 0) {
+                        lock (interactiveLock) { interactiveBuffer.Append(buf, 0, n); }
+                    }
+                } catch { }
+                finally { try { File.Delete(apPath); } catch { } }
+            });
+            tOut.IsBackground = true;
+            tOut.Start();
+
+            Thread tErr = new Thread(() => {
+                try {
+                    char[] buf = new char[4096];
+                    int n;
+                    while (interactiveProcess != null && !interactiveProcess.HasExited && (n = interactiveProcess.StandardError.Read(buf, 0, buf.Length)) > 0) {
+                        lock (interactiveLock) { interactiveBuffer.Append(buf, 0, n); }
+                    }
+                } catch { }
+            });
+            tErr.IsBackground = true;
+            tErr.Start();
+        }
+
+        public void SendInteractiveLine(string text)
+        {
+            if (!IsInteractiveAlive) return;
+            try { interactiveStdin.Write(text + "\n"); interactiveStdin.Flush(); } catch { }
+        }
+
+        public void SendInteractiveRaw(char c)
+        {
+            if (!IsInteractiveAlive) return;
+            try { interactiveStdin.Write(c); interactiveStdin.Flush(); } catch { }
+        }
+
+        public string PollInteractiveOutput()
+        {
+            lock (interactiveLock)
+            {
+                string result = interactiveBuffer.ToString();
+                interactiveBuffer.Clear();
+                return result;
+            }
+        }
+
+        public void StopInteractiveShell()
+        {
+            if (interactiveProcess != null)
+            {
+                try { if (!interactiveProcess.HasExited) interactiveProcess.Kill(); } catch { }
+            }
+            interactiveProcess = null;
+            interactiveStdin = null;
+        }
+
         public string WriteRemoteBytes(string remotePath, byte[] data)
         {
             if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
@@ -200,6 +297,7 @@ namespace MYSFTP
         {
             connected = false;
             StopStreaming();
+            StopInteractiveShell();
             if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
             {
                 try { File.Delete(askpassPath); } catch { }
@@ -270,10 +368,12 @@ namespace MYSFTP
             serverThread.IsBackground = true;
             serverThread.Start();
 
-            // Wait until local web server is fully listening and responding
+            // Wait until local web server is fully listening and responding.
+            // We only launch the window AFTER a real 200 OK, which is what fixes
+            // the "have to open it twice" problem.
             WaitForServerReady("http://127.0.0.1:" + port + "/");
 
-            // Launch standalone isolated app window
+            // Launch standalone isolated app window (own icon, no browser chrome)
             LaunchNativeAppWindow("http://127.0.0.1:" + port + "/");
 
             if (browserProcess != null)
@@ -285,44 +385,107 @@ namespace MYSFTP
             try { listener.Stop(); } catch { }
         }
 
-        private static void WaitForServerReady(string url)
+        private static bool WaitForServerReady(string url)
         {
-            for (int i = 0; i < 20; i++)
+            // Give it real time: on first-ever launch Windows Defender / disk cache
+            // can slow the very first requests down a lot. Retrying quickly but for
+            // longer avoids the old "open it twice" problem where the app window
+            // opened before the local server had actually answered once.
+            for (int i = 0; i < 150; i++)
             {
                 try
                 {
                     HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                    req.Timeout = 400;
+                    req.Timeout = 700;
                     using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
                     {
-                        if (res.StatusCode == HttpStatusCode.OK) break;
+                        if (res.StatusCode == HttpStatusCode.OK) return true;
                     }
                 }
-                catch { Thread.Sleep(50); }
+                catch { }
+                Thread.Sleep(100);
             }
+            return false;
         }
 
-        private static void LaunchNativeAppWindow(string url)
+        private static string FindAppBrowser(out bool isEdge)
         {
             string edgePath = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
             if (!File.Exists(edgePath)) edgePath = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
             string chromePath = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
             if (!File.Exists(chromePath)) chromePath = @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
 
-            string browser = File.Exists(edgePath) ? edgePath : (File.Exists(chromePath) ? chromePath : null);
+            if (File.Exists(chromePath)) { isEdge = false; return chromePath; }
+            if (File.Exists(edgePath)) { isEdge = true; return edgePath; }
+            isEdge = false;
+            return null;
+        }
+
+        private static void CleanStaleProfileLocks(string userProfile)
+        {
+            // A profile dir left behind by a crashed/killed previous run can hold a
+            // "SingletonLock" that makes the NEXT launch silently fail to open a
+            // window on the first click, forcing the user to click twice.
+            try
+            {
+                if (!Directory.Exists(userProfile)) return;
+                string[] lockNames = { "SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile" };
+                foreach (string ln in lockNames)
+                {
+                    string lp = Path.Combine(userProfile, ln);
+                    if (File.Exists(lp)) { try { File.Delete(lp); } catch { } }
+                }
+            }
+            catch { }
+        }
+
+        private static void LaunchNativeAppWindow(string url)
+        {
+            bool isEdge;
+            string browser = FindAppBrowser(out isEdge);
             string userProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MYSFTP_Desktop_Profile");
 
-            if (browser != null)
+            if (browser == null)
             {
+                // No Chromium-based browser found at all — this is the only case where
+                // we truly cannot open an isolated app window, so fall back to the
+                // system default browser rather than failing silently.
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                return;
+            }
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                CleanStaleProfileLocks(userProfile);
+
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v180\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v180\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
-                browserProcess = Process.Start(psi);
-            }
-            else
-            {
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
+                try
+                {
+                    browserProcess = Process.Start(psi);
+                }
+                catch
+                {
+                    browserProcess = null;
+                }
+
+                if (browserProcess == null)
+                {
+                    continue; // retry once with a cleaned profile
+                }
+
+                // Detect an immediate crash (e.g. locked profile) and retry once
+                // automatically instead of leaving the user with nothing on screen.
+                Thread.Sleep(700);
+                if (!browserProcess.HasExited) return; // window is up, we're done
+
+                // process died almost instantly — clean up and try again with a
+                // fresh, timestamped profile directory so a corrupted profile can't
+                // repeat the failure.
+                userProfile = userProfile + "_" + DateTime.Now.Ticks;
             }
         }
 
@@ -364,7 +527,7 @@ namespace MYSFTP
                     res.ContentLength64 = buf.Length;
                     res.OutputStream.Write(buf, 0, buf.Length);
                 }
-                else if (path == "/icon.jpg" || path == "/favicon.ico")
+                else if (path == "/icon.jpg")
                 {
                     string iconFile = Path.Combine(dataDir, "Icon.jpg");
                     if (File.Exists(iconFile))
@@ -373,6 +536,24 @@ namespace MYSFTP
                         res.ContentType = "image/jpeg";
                         res.ContentLength64 = iconBuf.Length;
                         res.OutputStream.Write(iconBuf, 0, iconBuf.Length);
+                    }
+                    else
+                    {
+                        res.StatusCode = 404;
+                    }
+                }
+                else if (path == "/favicon.ico")
+                {
+                    // Serve a real .ico so the app-mode window picks it up as its OWN
+                    // taskbar/title-bar icon instead of falling back to the browser's
+                    // generic icon (which is what made it look like "Edge opened").
+                    string icoFile = Path.Combine(dataDir, "app.ico");
+                    if (File.Exists(icoFile))
+                    {
+                        byte[] icoBuf = File.ReadAllBytes(icoFile);
+                        res.ContentType = "image/x-icon";
+                        res.ContentLength64 = icoBuf.Length;
+                        res.OutputStream.Write(icoBuf, 0, icoBuf.Length);
                     }
                     else
                     {
@@ -410,6 +591,7 @@ namespace MYSFTP
 
                         if (test.Contains("MYSFTP_OK"))
                         {
+                            sshManager.StartInteractiveShell();
                             SendJson(res, "{\"success\":true,\"protocol\":\"SFTP\",\"name\":\"" + EscapeJson(activeName) + "\"}");
                         }
                         else
@@ -442,20 +624,16 @@ namespace MYSFTP
                 {
                     string body = ReadBody(req);
                     string cmd = ExtractVal(body, "command");
-                    bool stream = ExtractVal(body, "stream") == "true";
 
                     if (activeProtocol == "SFTP" && sshManager.IsConnected)
                     {
-                        if (stream)
-                        {
-                            sshManager.StartStreamingCommand(cmd);
-                            SendJson(res, "{\"success\":true,\"streaming\":true}");
-                        }
-                        else
-                        {
-                            string outStr = sshManager.RunCommand("\"" + cmd.Replace("\"", "\\\"") + " 2>&1\"", 15000);
-                            SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\"}");
-                        }
+                        // Real persistent PTY shell: write the line to stdin, the remote
+                        // shell echoes it and prints its own prompt/output which is picked
+                        // up by /api/terminal/poll. Auto-restart the shell if it died
+                        // (e.g. after an idle timeout) instead of silently failing.
+                        if (!sshManager.IsInteractiveAlive) sshManager.StartInteractiveShell();
+                        sshManager.SendInteractiveLine(cmd);
+                        SendJson(res, "{\"success\":true}");
                     }
                     else
                     {
@@ -475,12 +653,15 @@ namespace MYSFTP
                 }
                 else if (path == "/api/terminal/poll")
                 {
-                    string stream = sshManager.GetStreamOutput();
-                    SendJson(res, "{\"output\":\"" + EscapeJson(stream) + "\"}");
+                    string stream = sshManager.PollInteractiveOutput();
+                    SendJson(res, "{\"output\":\"" + EscapeJson(stream) + "\",\"alive\":" + (sshManager.IsInteractiveAlive ? "true" : "false") + "}");
                 }
                 else if (path == "/api/terminal/break" && req.HttpMethod == "POST")
                 {
-                    sshManager.StopStreaming();
+                    // Send a real Ctrl+C (0x03) down the PTY so the remote foreground
+                    // process (tail -f, pm2 logs, a stuck script) is interrupted without
+                    // killing the whole SSH session, just like a real terminal.
+                    sshManager.SendInteractiveRaw((char)3);
                     SendJson(res, "{\"success\":true}");
                 }
                 else if (path == "/api/fs/list")
@@ -913,8 +1094,15 @@ namespace MYSFTP
 <head>
   <meta charset=""UTF-8"">
   <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-  <title>MYSFTP v1.8.0 — Desktop Suite</title>
-  <link rel=""icon"" type=""image/jpeg"" href=""/icon.jpg"">
+  <title>MYSFTP</title>
+  <link rel=""icon"" type=""image/x-icon"" href=""/favicon.ico"">
+  <link rel=""shortcut icon"" type=""image/x-icon"" href=""/favicon.ico"">
+  <meta name=""theme-color"" content=""#060709"">
+  <meta name=""application-name"" content=""MYSFTP"">
+  <meta name=""msapplication-TileColor"" content=""#060709"">
+  <meta name=""msapplication-TileImage"" content=""/favicon.ico"">
+  <meta name=""apple-mobile-web-app-title"" content=""MYSFTP"">
+  <link rel=""apple-touch-icon"" href=""/icon.jpg"">
   <link rel=""preconnect"" href=""https://fonts.googleapis.com"">
   <link rel=""preconnect"" href=""https://fonts.gstatic.com"" crossorigin>
   <link href=""https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800;900&display=swap"" rel=""stylesheet"">
@@ -953,6 +1141,11 @@ namespace MYSFTP
     /* ── Progress Bar ── */
     #top-loader { position:absolute; top:0; left:0; width:100%; height:3px; background:linear-gradient(90deg, transparent, var(--gold), var(--gold-light), transparent); background-size:200% 100%; z-index:99999; display:none; animation:loadMove 1.2s infinite linear; }
     @keyframes loadMove { 0%{background-position:200% 0;} 100%{background-position:-200% 0;} }
+    #load-badge { display:none; align-items:center; gap:7px; font-size:11.5px; font-weight:700; color:var(--gold-light); background:rgba(205,189,148,0.1); border:1px solid var(--border-gold); border-radius:20px; padding:4px 12px; }
+    #load-badge.on { display:inline-flex; }
+    #p-files.drag-on { outline:2px dashed var(--gold); outline-offset:-6px; background:rgba(205,189,148,0.05); border-radius:var(--r-md); }
+    .spin-dot { width:11px; height:11px; border-radius:50%; border:2px solid rgba(205,189,148,0.25); border-top-color:var(--gold); animation:spinDot .7s linear infinite; }
+    @keyframes spinDot { to { transform:rotate(360deg); } }
 
     /* ── Sidebar ── */
     .sb { width:230px; background:rgba(12,13,18,0.96); backdrop-filter:blur(24px); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; z-index:10; }
@@ -1104,7 +1297,10 @@ namespace MYSFTP
 
       <header class=""topbar"">
         <div class=""crumbs"" id=""crumbs""><span class=""crumb"">⚡ Profil Server</span></div>
-        <div style=""display:flex;gap:8px;"" id=""top-actions""></div>
+        <div style=""display:flex;gap:10px;align-items:center;"">
+          <span id=""load-badge""><span class=""spin-dot""></span> Memuat...</span>
+          <div style=""display:flex;gap:8px;"" id=""top-actions""></div>
+        </div>
       </header>
 
       <div class=""stage"">
@@ -1128,9 +1324,9 @@ namespace MYSFTP
         <section class=""page"" id=""p-files"">
           <div class=""toolbar"">
             <div style=""display:flex;gap:8px;"">
-              <button class=""btn btn-d btn-sm"" onclick=""fsUp()"">◀ Kembali</button>
-              <button class=""btn btn-d btn-sm"" onclick=""fsRefresh()"">🔄 Refresh</button>
-              <button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload File</button>
+              <button class=""btn btn-d btn-sm nav-btn"" onclick=""fsUp()"">◀ Kembali</button>
+              <button class=""btn btn-d btn-sm nav-btn"" onclick=""fsRefresh()"">🔄 Refresh</button>
+              <button class=""btn btn-upload btn-sm"" onclick=""triggerUpload()"">📤 Upload dari Lokal</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsNew('file')"">+ File Baru</button>
               <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder</button>
             </div>
@@ -1288,7 +1484,28 @@ namespace MYSFTP
       loadProfiles();
       document.getElementById('tinp').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') tExec();
+        else if (e.key === 'ArrowUp') { e.preventDefault(); tHistoryNav(-1); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); tHistoryNav(1); }
       });
+      var dropZone = document.getElementById('p-files');
+      ['dragenter','dragover'].forEach(function(ev) {
+        dropZone.addEventListener(ev, function(e) {
+          e.preventDefault(); e.stopPropagation();
+          if (curView === 'files' && connected) dropZone.classList.add('drag-on');
+        });
+      });
+      ['dragleave','drop'].forEach(function(ev) {
+        dropZone.addEventListener(ev, function(e) {
+          e.preventDefault(); e.stopPropagation();
+          dropZone.classList.remove('drag-on');
+        });
+      });
+      dropZone.addEventListener('drop', function(e) {
+        if (curView !== 'files' || !connected) return;
+        var files = e.dataTransfer && e.dataTransfer.files;
+        if (files && files.length) uploadFileList(files);
+      });
+
       window.addEventListener('keydown', function(e) {
         if (e.ctrlKey && e.key === 's') {
           e.preventDefault();
@@ -1304,6 +1521,7 @@ namespace MYSFTP
 
     function showLoader(show) {
       document.getElementById('top-loader').style.display = show ? 'block' : 'none';
+      document.getElementById('load-badge').classList.toggle('on', !!show);
     }
 
     function go(v) {
@@ -1493,6 +1711,8 @@ namespace MYSFTP
           document.getElementById('conn-bar').classList.add('on');
           document.getElementById('conn-bar-text').textContent = '● Terhubung ke ' + p.name + ' (' + p.host + ')';
           document.getElementById('tprompt').textContent = p.username + '@' + p.host + ':~#';
+          tClear();
+          if (p.protocol === 'SFTP') startTermPoll();
 
           renderCards();
           go('files');
@@ -1530,14 +1750,27 @@ namespace MYSFTP
     }
 
     // ── File Explorer with Debounced Caching ──
+    function setNavButtonsBusy(busy) {
+      document.querySelectorAll('.nav-btn').forEach(function(b) {
+        b.disabled = busy;
+        b.style.opacity = busy ? '0.5' : '1';
+        b.style.pointerEvents = busy ? 'none' : 'auto';
+      });
+    }
+
     function fsLoad(path) {
-      if (isNavigating) return;
+      if (isNavigating) return; // hard guard: a second click while loading does nothing
       if (!path) path = '/root';
       isNavigating = true;
       showLoader(true);
+      setNavButtonsBusy(true);
 
-      // Instant cache render
-      if (fsCache[path]) {
+      // If we already have this folder cached, show it instantly — but only
+      // when it's actually a DIFFERENT folder than what's on screen, so a
+      // double-click on the same button never looks like it jumped back —
+      // there's nothing to jump back to because the content doesn't change
+      // until the real, fresh data arrives.
+      if (fsCache[path] && path !== fsPath) {
         fsPath = path;
         fsItems = fsCache[path];
         renderFiles();
@@ -1548,6 +1781,7 @@ namespace MYSFTP
         .then(function(d) {
           isNavigating = false;
           showLoader(false);
+          setNavButtonsBusy(false);
           if (d.success) {
             fsPath = d.currentPath;
             fsItems = d.items || [];
@@ -1559,6 +1793,7 @@ namespace MYSFTP
         }).catch(function(err) {
           isNavigating = false;
           showLoader(false);
+          setNavButtonsBusy(false);
           toast('❌ Error: ' + err.message);
         });
     }
@@ -1623,34 +1858,52 @@ namespace MYSFTP
     function handleFileSelected(e) {
       var files = e.target.files;
       if (!files || files.length === 0) return;
+      uploadFileList(files);
+    }
 
-      var file = files[0];
-      toast('⚡ Mengunggah berkas: ' + file.name + '...');
+    function uploadOneFile(file) {
+      return new Promise(function(resolve) {
+        var reader = new FileReader();
+        reader.onload = function(evt) {
+          var b64 = evt.target.result.split(',')[1];
+          var remoteDest = (fsPath === '/' ? '' : fsPath) + '/' + file.name;
+          fetch('/api/fs/upload', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ path: remoteDest, data: b64 })
+          }).then(function(r){return r.json();}).then(function(res) {
+            resolve({ name: file.name, ok: !!res.success, error: res.error });
+          }).catch(function(err) {
+            resolve({ name: file.name, ok: false, error: err.message });
+          });
+        };
+        reader.onerror = function() { resolve({ name: file.name, ok: false, error: 'Gagal membaca berkas lokal' }); };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function uploadFileList(fileList) {
+      var files = Array.prototype.slice.call(fileList);
+      if (!files.length) return;
       showLoader(true);
+      toast('⚡ Mengunggah ' + files.length + ' berkas ke ' + fsPath + ' ...');
 
-      var reader = new FileReader();
-      reader.onload = function(evt) {
-        var b64 = evt.target.result.split(',')[1];
-        var remoteDest = (fsPath === '/' ? '' : fsPath) + '/' + file.name;
-
-        fetch('/api/fs/upload', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ path: remoteDest, data: b64 })
-        }).then(function(r){return r.json();}).then(function(res) {
+      var i = 0, okCount = 0, failCount = 0;
+      function next() {
+        if (i >= files.length) {
           showLoader(false);
-          if (res.success) {
-            toast('✔ Berkas ' + file.name + ' berhasil diunggah!');
-            fsRefresh();
-          } else {
-            toast('❌ Gagal upload: ' + (res.error || 'Unknown error'));
-          }
-        }).catch(function(err) {
-          showLoader(false);
-          toast('❌ Upload error: ' + err.message);
+          fsRefresh();
+          if (failCount === 0) toast('✔ ' + okCount + ' berkas berhasil diunggah!');
+          else toast('⚠ ' + okCount + ' berhasil, ' + failCount + ' gagal diunggah.');
+          return;
+        }
+        var f = files[i++];
+        uploadOneFile(f).then(function(res) {
+          if (res.ok) { okCount++; } else { failCount++; toast('❌ Gagal: ' + res.name + (res.error ? ' — ' + res.error : '')); }
+          next();
         });
-      };
-      reader.readAsDataURL(file);
+      }
+      next();
     }
 
     function fsNew(type) {
@@ -1710,7 +1963,14 @@ namespace MYSFTP
         });
     }
 
-    // ── SSH Termius Terminal Engine ──
+    // ── SSH Termius Terminal Engine (real persistent PTY session) ──
+    // Commands are written to a single long-lived remote shell. The remote
+    // shell itself echoes the input and prints its own real prompt, so what
+    // you see is exactly what a real SSH terminal shows — cd, history, nano,
+    // htop, pm2 logs, all work like a genuine session, not one-off commands.
+    var termHistory = [];
+    var termHistPos = -1;
+
     function tSend(cmd) {
       document.getElementById('tinp').value = cmd;
       tExec();
@@ -1718,51 +1978,45 @@ namespace MYSFTP
 
     function tStream(cmd) {
       document.getElementById('tinp').value = cmd;
-      tExec(true);
+      tExec();
     }
 
-    function tExec(isStream) {
+    function tExec() {
       var inp = document.getElementById('tinp');
-      var cmd = inp.value.trim();
-      if (!cmd) return;
+      var cmd = inp.value;
+      if (cmd === '') return;
       inp.value = '';
 
-      if (cmd === 'clear') { tClear(); return; }
+      if (cmd.trim() === 'clear') { tClear(); return; }
 
       if (!connected) {
         tPrint('\r\n\x1b[31m[!] Belum terhubung ke server. Buka tab Profil Server lalu klik Hubungkan.\x1b[0m\r\n');
         return;
       }
 
-      tPrint('\r\n\x1b[32m' + (connProfile ? connProfile.username + '@' + connProfile.host : 'root@server') + '\x1b[0m:\x1b[34m~#\x1b[0m \x1b[1m' + cmd + '\x1b[0m\r\n');
-      showLoader(true);
+      termHistory.push(cmd);
+      termHistPos = termHistory.length;
 
       fetch('/api/terminal/exec', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ command: cmd, stream: isStream || false })
-      }).then(function(r){return r.json();}).then(function(res) {
-        showLoader(false);
-        if (res.streaming) {
-          startTermPoll();
-        } else if (res.output) {
-          tPrint(res.output + '\r\n');
-        }
+        body: JSON.stringify({ command: cmd })
       }).catch(function(err) {
-        showLoader(false);
-        tPrint('\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
+        tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
       });
     }
 
     function startTermPoll() {
       stopTermPoll();
+      // Fast, lightweight poll — plain text diff only, so 120ms feels live
+      // without being heavy, similar to how Termius streams a PTY.
       termStreamPoll = setInterval(function() {
         fetch('/api/terminal/poll')
           .then(function(r){return r.json();})
           .then(function(d) {
             if (d.output) tPrint(d.output);
-          });
-      }, 300);
+          }).catch(function() {});
+      }, 120);
     }
 
     function stopTermPoll() {
@@ -1770,10 +2024,16 @@ namespace MYSFTP
     }
 
     function tBreak() {
-      stopTermPoll();
       fetch('/api/terminal/break',{method:'POST'});
-      tPrint('\r\n\x1b[33m^C [Process Interrupted]\x1b[0m\r\n');
-      toast('🛑 Signal SIGINT (Ctrl+C) terkirim.');
+      toast('🛑 Ctrl+C terkirim ke sesi terminal.');
+    }
+
+    function tHistoryNav(dir) {
+      if (!termHistory.length) return;
+      termHistPos += dir;
+      if (termHistPos < 0) termHistPos = 0;
+      if (termHistPos >= termHistory.length) { termHistPos = termHistory.length; document.getElementById('tinp').value = ''; return; }
+      document.getElementById('tinp').value = termHistory[termHistPos];
     }
 
     function tPrint(txt) {
