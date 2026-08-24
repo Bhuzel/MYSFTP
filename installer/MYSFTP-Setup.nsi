@@ -9,7 +9,7 @@
 
 !define APP_NAME        "MYSFTP"
 !define APP_PUBLISHER   "ZellRayy"
-!define APP_VERSION     "1.9.0"
+!define APP_VERSION     "1.9.1"
 !define APP_EXE         "MYSFTP.exe"
 !define UNINST_KEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 

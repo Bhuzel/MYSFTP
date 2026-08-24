@@ -342,8 +342,47 @@ namespace MYSFTP
         private static string activeProtocol;
         private static string activeName;
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+
+        private const uint MB_ICONERROR = 0x00000010;
+        private const uint MB_OK = 0x00000000;
+
         [STAThread]
         static void Main(string[] args)
+        {
+            // Wrap absolutely everything: any unhandled exception here (a missing
+            // BCL method, a locked port, a permissions error, etc.) used to kill the
+            // process silently or dump a raw ".NET error" the user cannot act on.
+            // Now the person always gets a real, readable dialog instead of a dead app.
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                try
+                {
+                    Exception ex = e.ExceptionObject as Exception;
+                    MessageBoxW(IntPtr.Zero,
+                        "MYSFTP mengalami kesalahan tak terduga dan harus ditutup.\n\n" +
+                        (ex != null ? ex.Message : "Unknown error") +
+                        "\n\nSilakan buka kembali MYSFTP. Jika masalah berlanjut, install ulang aplikasi.",
+                        "MYSFTP - Kesalahan", MB_ICONERROR | MB_OK);
+                }
+                catch { }
+            };
+
+            try
+            {
+                RunApp();
+            }
+            catch (Exception ex)
+            {
+                MessageBoxW(IntPtr.Zero,
+                    "MYSFTP gagal dijalankan.\n\n" + ex.Message +
+                    "\n\nCoba tutup aplikasi ini lalu buka lagi. Jika tetap gagal, install ulang MYSFTP.",
+                    "MYSFTP - Gagal Memulai", MB_ICONERROR | MB_OK);
+            }
+        }
+
+        private static void RunApp()
         {
             try
             {
@@ -354,27 +393,63 @@ namespace MYSFTP
             dataDir = AppDomain.CurrentDomain.BaseDirectory;
             profilesFile = Path.Combine(dataDir, "connections.json");
 
-            // Find a free TCP port
-            TcpListener tcp = new TcpListener(IPAddress.Loopback, 0);
-            tcp.Start();
-            port = ((IPEndPoint)tcp.LocalEndpoint).Port;
-            tcp.Stop();
+            // Find a free TCP port. Retry a few times: on a freshly-installed
+            // machine antivirus/EDR sometimes holds a just-picked ephemeral port
+            // for a split second, which used to make HttpListener.Start() below
+            // throw on the very first run.
+            int freePort = 0;
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                try
+                {
+                    TcpListener tcp = new TcpListener(IPAddress.Loopback, 0);
+                    tcp.Start();
+                    freePort = ((IPEndPoint)tcp.LocalEndpoint).Port;
+                    tcp.Stop();
 
-            listener = new HttpListener();
-            listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
-            listener.Start();
+                    listener = new HttpListener();
+                    listener.Prefixes.Add("http://127.0.0.1:" + freePort + "/");
+                    listener.Start();
+                    port = freePort;
+                    break;
+                }
+                catch
+                {
+                    listener = null;
+                    Thread.Sleep(300);
+                }
+            }
+
+            if (listener == null)
+            {
+                MessageBoxW(IntPtr.Zero,
+                    "MYSFTP tidak bisa membuka server lokal (port terpakai atau diblokir).\n\n" +
+                    "Coba tutup aplikasi lain yang mungkin bentrok, matikan sementara antivirus, lalu buka MYSFTP lagi.",
+                    "MYSFTP - Gagal Memulai Server", MB_ICONERROR | MB_OK);
+                return;
+            }
 
             Thread serverThread = new Thread(StartServer);
             serverThread.IsBackground = true;
             serverThread.Start();
 
-            // Wait until local web server is fully listening and responding.
-            // We only launch the window AFTER a real 200 OK, which is what fixes
-            // the "have to open it twice" problem.
-            WaitForServerReady("http://127.0.0.1:" + port + "/");
+            // ── Fix for "harus tutup lalu buka lagi baru bisa connect" ──
+            // We used to launch the browser straight at http://127.0.0.1:PORT/ and
+            // only *hope* the local HttpListener was already answering. On a fresh
+            // install, Windows Defender/SmartScreen scanning the new, unsigned exe
+            // (or a cold disk cache) can delay the first real response by several
+            // seconds — longer than the old wait — so the browser showed
+            // ERR_CONNECTION_REFUSED and the user had to close and reopen manually.
+            //
+            // Instead, we now launch the browser at a tiny local HTML file that has
+            // NOTHING to do with our HttpListener (so it always opens instantly),
+            // and that page polls the real server itself with retries until it
+            // answers, then redirects. The user only ever sees a friendly "Menyiapkan
+            // aplikasi..." loading screen — never a browser error page — and it
+            // will keep retrying for up to a minute instead of failing once.
+            string loadingUrl = WriteLoadingBootstrap(port);
 
-            // Launch standalone isolated app window (own icon, no browser chrome)
-            LaunchNativeAppWindow("http://127.0.0.1:" + port + "/");
+            LaunchNativeAppWindow(loadingUrl);
 
             if (browserProcess != null)
                 browserProcess.WaitForExit();
@@ -385,27 +460,73 @@ namespace MYSFTP
             try { listener.Stop(); } catch { }
         }
 
-        private static bool WaitForServerReady(string url)
+        private static string WriteLoadingBootstrap(int listenPort)
         {
-            // Give it real time: on first-ever launch Windows Defender / disk cache
-            // can slow the very first requests down a lot. Retrying quickly but for
-            // longer avoids the old "open it twice" problem where the app window
-            // opened before the local server had actually answered once.
-            for (int i = 0; i < 150; i++)
+            string html = @"<!DOCTYPE html>
+<html lang=""id""><head><meta charset=""UTF-8"">
+<title>MYSFTP</title>
+<link rel=""icon"" href=""data:,"">
+<style>
+  html,body{height:100%;margin:0;background:#060709;color:#eae6db;font-family:Segoe UI,Inter,system-ui,sans-serif;}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;}
+  .logo{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#cdbd94,#96865c);color:#111;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:24px;box-shadow:0 6px 20px rgba(205,189,148,.3);}
+  .title{font-weight:800;font-size:17px;letter-spacing:.5px;color:#f0e6cf;}
+  .spin{width:30px;height:30px;border-radius:50%;border:3px solid rgba(205,189,148,.2);border-top-color:#cdbd94;animation:sp .8s linear infinite;}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .msg{font-size:12.5px;color:#8a877c;}
+  .err{color:#e06c75;text-align:center;max-width:340px;line-height:1.6;font-size:12.5px;}
+  .retrybtn{margin-top:6px;background:#cdbd94;color:#111;border:none;border-radius:8px;padding:8px 18px;font-weight:700;font-size:12.5px;cursor:pointer;display:none;}
+</style></head>
+<body>
+  <div class=""logo"">M</div>
+  <div class=""title"">MYSFTP</div>
+  <div class=""spin"" id=""sp""></div>
+  <div class=""msg"" id=""m"">Menyiapkan aplikasi...</div>
+  <div class=""err"" id=""e"" style=""display:none""></div>
+  <button class=""retrybtn"" id=""rb"" onclick=""tries=0;document.getElementById('rb').style.display='none';document.getElementById('sp').style.display='block';document.getElementById('e').style.display='none';check();"">Coba Lagi</button>
+<script>
+  var target = 'http://127.0.0.1:__PORT__/';
+  var tries = 0;
+  var maxTries = 300; // ~60s of retrying, covers slow first-run AV scans
+  function check(){
+    tries++;
+    fetch(target, {cache:'no-store', mode:'cors'}).then(function(r){
+      if (r.ok) { location.replace(target); }
+      else { scheduleRetry(); }
+    }).catch(function(){ scheduleRetry(); });
+  }
+  function scheduleRetry(){
+    if (tries >= maxTries) {
+      document.getElementById('sp').style.display = 'none';
+      document.getElementById('m').style.display = 'none';
+      document.getElementById('e').style.display = 'block';
+      document.getElementById('e').textContent = 'Server lokal MYSFTP belum merespons. Ini biasa terjadi sekali saja di percobaan pertama (Windows sedang memeriksa aplikasi baru). Klik Coba Lagi, atau tutup dan buka ulang MYSFTP.';
+      document.getElementById('rb').style.display = 'inline-block';
+      return;
+    }
+    document.getElementById('m').textContent = 'Menyiapkan aplikasi...';
+    setTimeout(check, 200);
+  }
+  check();
+</script>
+</body></html>";
+
+            html = html.Replace("__PORT__", listenPort.ToString());
+
+            string bootstrapPath = Path.Combine(dataDir, "loading.html");
+            try
             {
-                try
-                {
-                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-                    req.Timeout = 700;
-                    using (HttpWebResponse res = (HttpWebResponse)req.GetResponse())
-                    {
-                        if (res.StatusCode == HttpStatusCode.OK) return true;
-                    }
-                }
-                catch { }
-                Thread.Sleep(100);
+                File.WriteAllText(bootstrapPath, html, Encoding.UTF8);
+                return new Uri(bootstrapPath).AbsoluteUri;
             }
-            return false;
+            catch
+            {
+                // If we can't write next to the exe (locked-down folder), fall back
+                // to the OS temp directory, which is always writable.
+                bootstrapPath = Path.Combine(Path.GetTempPath(), "mysftp_loading.html");
+                File.WriteAllText(bootstrapPath, html, Encoding.UTF8);
+                return new Uri(bootstrapPath).AbsoluteUri;
+            }
         }
 
         private static string FindAppBrowser(out bool isEdge)
@@ -789,7 +910,12 @@ namespace MYSFTP
             try
             {
                 if (string.IsNullOrEmpty(dir) || dir == ".") dir = "/root";
-                dir = dir.TrimEnd('/');
+                // NOTE: TrimEnd(char) — the single-char overload — only exists on
+                // newer .NET runtimes. Using the char[] overload explicitly (which
+                // has existed since .NET 1.1) avoids a "Method not found:
+                // System.String.TrimEnd(Char)" crash on machines/CLRs that only
+                // have the classic TrimEnd(params char[]) overload.
+                dir = dir.TrimEnd(new char[] { '/' });
                 if (string.IsNullOrEmpty(dir)) dir = "/";
 
                 string raw = sshManager.RunCommand("\"ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"", 7000);
@@ -1271,7 +1397,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.0 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.1 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">

@@ -14,75 +14,134 @@ permissions:
   packages: write
 
 jobs:
-  build:
-    name: Build MYSFTP (Android APK & Windows EXE)
+  # ── Android APK ──────────────────────────────────────────────────────────
+  build-android:
+    name: Build Android APK
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-        cache: 'gradle'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
 
-    - name: Grant Execute Permission to Gradlew
-      run: chmod +x gradlew
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x gradlew
 
-    - name: Build Android Debug APK
-      run: ./gradlew assembleDebug --no-daemon
+      - name: Build Android Debug APK
+        run: ./gradlew assembleDebug --no-daemon
 
-    - name: Prepare Release Artifacts
-      run: |
-        mkdir -p build-artifacts
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.9.0.apk
-        if [ -f "MYSFTP.exe" ]; then
-          cp MYSFTP.exe build-artifacts/MYSFTP.exe
-          cp MYSFTP.exe build-artifacts/MYSFTP-v1.9.0.exe
-        fi
-        if [ -f "MYSFTP-Setup.exe" ]; then
-          cp MYSFTP-Setup.exe build-artifacts/MYSFTP-Setup.exe
-          cp MYSFTP-Setup.exe build-artifacts/MYSFTP-v1.9.0-Setup.exe
-        fi
+      - name: Stage APK Artifact
+        run: |
+          mkdir -p build-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "build-artifacts/MYSFTP-${{ github.ref_name }}.apk"
 
-    - name: Upload APK Artifact (Actions Tab)
-      uses: actions/upload-artifact@v4
-      with:
-        name: MYSFTP-v1.9.0-Build
-        path: build-artifacts/
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysftp-android
+          path: build-artifacts/
 
-    - name: Create or Update GitHub Release
-      if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.9.0' }}
-        name: "MYSFTP v1.9.0 (Dedicated Suite — Persistent PTY & Multi-File Upload)"
-        body: |
-          ## 🌟 MYSFTP v1.9.0 — Dedicated Suite by ZellRayy
+  # ── Windows EXE + Installer ─────────────────────────────────────────────
+  # This job ACTUALLY compiles MYSFTP.cs into MYSFTP.exe on every run, and
+  # then packages that fresh exe into MYSFTP-Setup.exe with NSIS. Nothing
+  # here depends on a pre-built binary being committed to the repo, so a
+  # source-only fix (like editing MYSFTP.cs) is guaranteed to make it into
+  # the next release — you never need to build/commit the .exe by hand.
+  build-windows:
+    name: Build Windows EXE & Installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-          ### ✨ Pembaruan Utama v1.9.0:
-          * 💻 **Instant Standalone Window Startup**: Proses inisialisasi server lokal tersinkronisasi 100% sebelum jendela aplikasi dibuka, memastikan aplikasi langsung terbuka lancar pada klik pertama tanpa error.
-          * 📤 **Fitur Unggah Berkas Multi-File Queue**: Tersedia tombol **`📤 Upload File`** di toolbar File Explorer untuk memilih dan mengunggah banyak berkas sekaligus dari PC langsung ke server VPS remote.
-          * 💻 **SSH Termius Console Penuh (Persistent PTY)**:
-            * Sesi shell SSH interaktif persisten (`ssh -tt` PTY asli) dengan streaming output cepat (120ms polling).
-            * Dukungan riwayat perintah keyboard (↑ / ↓ Arrow Keys) dan tombol **`🛑 Ctrl+C`** interrupt.
-          * ⚡ **Anti-Glitch Debounced Navigation**: Navigasi tombol **`◀ Kembali`** dan folder kini dilengkapi *navigation lock & top progress loader*, menghilangkan bug double-click atau delay.
-          * 📦 **Windows Installer Package**: Dilengkapi installer NSIS (`MYSFTP-Setup.exe`) untuk instalasi aplikasi ke drive C:/D: dengan Start Menu & Desktop shortcut.
-          * 📝 **Pro Code Editor**: Terintegrasi langsung dengan shortcut `Ctrl+S`.
+      - name: Compile MYSFTP.exe from MYSFTP.cs
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:winexe /platform:x64 /out:MYSFTP.exe /win32icon:app.ico /reference:System.dll /reference:System.Core.dll MYSFTP.cs
+          if ($LASTEXITCODE -ne 0) { throw "csc.exe failed to compile MYSFTP.cs (exit $LASTEXITCODE)" }
+          if (!(Test-Path "MYSFTP.exe")) { throw "MYSFTP.exe was not produced" }
 
-          ### 📦 File Unduhan Resmi:
-          * 💻 **Windows PC (Installer):** Unduh `MYSFTP-Setup.exe` (atau `MYSFTP-v1.9.0-Setup.exe`).
-          * 💻 **Windows PC (Portable):** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.9.0.exe`).
-          * 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.9.0.apk`).
-        draft: false
-        prerelease: false
-        files: |
-          build-artifacts/*
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Stage Installer Payload
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "installer\files" | Out-Null
+          Copy-Item MYSFTP.exe "installer\files\MYSFTP.exe" -Force
+          Copy-Item app.ico "installer\files\app.ico" -Force
+          Copy-Item Icon.jpg "installer\files\Icon.jpg" -Force
+
+      - name: Build MYSFTP-Setup.exe with NSIS
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer\MYSFTP-Setup.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed (exit $LASTEXITCODE)" }
+          if (!(Test-Path "installer\MYSFTP-Setup.exe")) { throw "MYSFTP-Setup.exe was not produced" }
+
+      - name: Stage Windows Artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "build-artifacts" | Out-Null
+          Copy-Item MYSFTP.exe "build-artifacts\MYSFTP.exe" -Force
+          Copy-Item MYSFTP.exe "build-artifacts\MYSFTP-${{ github.ref_name }}.exe" -Force
+          Copy-Item "installer\MYSFTP-Setup.exe" "build-artifacts\MYSFTP-Setup.exe" -Force
+          Copy-Item "installer\MYSFTP-Setup.exe" "build-artifacts\MYSFTP-${{ github.ref_name }}-Setup.exe" -Force
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysftp-windows
+          path: build-artifacts/
+
+  # ── Combine everything into one GitHub Release ──────────────────────────
+  release:
+    name: Publish Release
+    needs: [build-android, build-windows]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mysftp-android
+          path: build-artifacts
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: mysftp-windows
+          path: build-artifacts
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: "MYSFTP ${{ github.ref_name }} (Dedicated Suite — Persistent PTY & Multi-File Upload)"
+          body: |
+            ## 🌟 MYSFTP ${{ github.ref_name }} — Dedicated Suite by ZellRayy
+
+            Dibangun otomatis dari source `MYSFTP.cs` + proyek Android lewat GitHub Actions — bukan binary yang di-upload manual.
+
+            ### 📦 File Unduhan Resmi:
+            * 💻 **Windows PC (disarankan):** Unduh `MYSFTP-Setup.exe` — installer, cukup file ini saja, tidak perlu source/zip lain.
+            * 💻 **Windows PC (portable, tanpa install):** Unduh `MYSFTP.exe`.
+            * 📱 **HP Android:** Unduh `MYSFTP.apk`.
+          draft: false
+          prerelease: false
+          files: |
+            build-artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
