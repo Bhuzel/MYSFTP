@@ -112,10 +112,15 @@ jobs:
           path: build-artifacts/
 
   # ── Combine everything into one GitHub Release ──────────────────────────
+  # Only publish a Release when triggered by an actual version tag (v1.9.1,
+  # etc.) or a manual run — a normal commit/push to main just builds and
+  # tests, it should NOT create/overwrite a Release. This is what was
+  # producing duplicate "MYSFTP-main-Setup.exe" vs "MYSFTP-Setup.exe" files
+  # on every push: github.ref_name was "main" instead of a version tag.
   release:
     name: Publish Release
     needs: [build-android, build-windows]
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Download Android Artifact
