@@ -160,10 +160,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun connect(tabIndex: Int, connectionId: Long) {
         val currentTabState = if (tabIndex == 1) _state.value.tab1 else _state.value.tab2
         
+        // Jika tab ini sudah terhubung ke connectionId yang sama dan klien masih aktif,
+        // pertahankan folder yang sedang dibuka (misal /root/project/saya) agar tidak reset ke root!
+        if (currentTabState.connectionId == connectionId && currentTabState.connected && currentTabState.client?.isConnected == true) {
+            refresh(tabIndex, currentTabState.currentPath)
+            return
+        }
+
         // Disconnect old client of this tab if exists
         currentTabState.client?.let {
-            viewModelScope.launch(Dispatchers.IO) {
-                runCatching { it.disconnect() }
+            if (currentTabState.connectionId != connectionId) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    runCatching { it.disconnect() }
+                }
             }
         }
 
@@ -195,7 +204,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     repo.getById(connectionId)?.name ?: "Server"
                 }
 
-                val initialPath = if (connectionId == -1L) {
+                val initialPath = if (currentTabState.connectionId == connectionId && currentTabState.currentPath.isNotBlank()) {
+                    currentTabState.currentPath
+                } else if (connectionId == -1L) {
                     getLocalRootPath()
                 } else {
                     repo.getById(connectionId)?.initialPath ?: "/"
@@ -880,16 +891,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         return exts.any { lower.endsWith(it) } || !lower.contains(".")
     }
 
-    /** File data yang bisa dibuka di penampil DB. */
+    /** File data database yang dibuka di penampil DB khusus SQLite/BSON. */
     private fun looksLikeDatabase(name: String): Boolean {
         val lower = name.lowercase()
         return lower.endsWith(".db") || lower.endsWith(".sqlite") ||
             lower.endsWith(".sqlite3") || lower.endsWith(".db3") ||
-            lower.endsWith(".sqlitedb") || lower.endsWith(".bson") ||
-            lower.endsWith(".json") || lower.endsWith(".jsonl") ||
-            lower.endsWith(".ndjson") || lower.endsWith(".geojson") ||
-            lower.endsWith(".csv") || lower.endsWith(".tsv") ||
-            lower.endsWith(".sql") || lower.endsWith(".xml")
+            lower.endsWith(".sqlitedb") || lower.endsWith(".bson")
     }
 
     private fun getMimeType(fileName: String): String {

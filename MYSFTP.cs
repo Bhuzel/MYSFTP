@@ -13,19 +13,38 @@ namespace MYSFTP
     public class ScriptBridge
     {
         private MainForm form;
-        public ScriptBridge(MainForm f) { form = f; }
+        private string profilesFilePath;
 
-        public string GetLocalDrives()
+        public ScriptBridge(MainForm f)
         {
-            List<string> drives = new List<string>();
-            foreach (DriveInfo d in DriveInfo.GetDrives())
+            form = f;
+            profilesFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "connections.json");
+        }
+
+        public string LoadProfiles()
+        {
+            try
             {
-                if (d.IsReady)
+                if (File.Exists(profilesFilePath))
                 {
-                    drives.Add("{\"name\":\"" + EscapeJson(d.Name) + "\",\"path\":\"" + EscapeJson(d.RootDirectory.FullName.Replace('\\', '/')) + "\",\"isDirectory\":true,\"size\":" + d.TotalSize + "}");
+                    return File.ReadAllText(profilesFilePath, Encoding.UTF8);
                 }
             }
-            return "[" + string.Join(",", drives.ToArray()) + "]";
+            catch { }
+            return "[{\"id\":\"1\",\"name\":\"💻 Local Drive (Laptop)\",\"protocol\":\"LOCAL\",\"host\":\"localhost\",\"port\":22,\"username\":\"local\"},{\"id\":\"2\",\"name\":\"🌐 Production VPS\",\"protocol\":\"SFTP\",\"host\":\"103.145.226.88\",\"port\":22,\"username\":\"root\"}]";
+        }
+
+        public string SaveProfiles(string json)
+        {
+            try
+            {
+                File.WriteAllText(profilesFilePath, json, Encoding.UTF8);
+                return "{\"success\":true}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
         }
 
         public string ListDirectory(string path)
@@ -169,13 +188,12 @@ namespace MYSFTP
 
         public MainForm()
         {
-            this.Text = "MYSFTP v1.1.0 — Desktop Client (by ZellRayy)";
+            this.Text = "MYSFTP v1.2.0 — Desktop Client (by ZellRayy)";
             this.Size = new Size(1280, 820);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.FromArgb(10, 10, 11);
             this.ForeColor = Color.FromArgb(217, 212, 199);
 
-            // Set Icon from Icon.jpg if exists
             try
             {
                 string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Icon.jpg");
@@ -200,173 +218,158 @@ namespace MYSFTP
 
             this.Controls.Add(browser);
 
-            browser.DocumentText = HtmlUi;
+            browser.Navigate("about:blank");
+            if (browser.Document != null)
+            {
+                browser.Document.Write(HtmlUi);
+            }
         }
 
-        #region Embedded HTML UI
+        #region Embedded HTML UI (Direct Luxury Dark Styles)
         private const string HtmlUi = @"<!DOCTYPE html>
-<html lang=""id"" data-theme=""dark"">
+<html>
 <head>
   <meta charset=""UTF-8"">
   <meta http-equiv=""X-UA-Compatible"" content=""IE=edge"">
-  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-  <title>MYSFTP v1.1.0 — Desktop Client</title>
+  <title>MYSFTP v1.2.0</title>
   <style>
-    :root, [data-theme=""dark""] {
-      --bg: #0a0a0b;
-      --bg-soft: #121213;
-      --surface: #19191b;
-      --surface-2: #222224;
-      --border: #2b2b2e;
-      --border-soft: #1f1f21;
-      --text: #d9d4c7;
-      --text-muted: #8b877c;
-      --text-dim: #5c5952;
-      --accent: #cdbd94;
-      --accent-strong: #ded0aa;
-      --accent-ink: #17150f;
-      --success: #7fbf8f;
-      --error: #e06c75;
-      --code-bg: #101011;
-      color-scheme: dark;
-    }
     * { margin:0; padding:0; box-sizing:border-box; }
-    body { background:var(--bg); color:var(--text); font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13.5px; height:100vh; overflow:hidden; user-select:none; }
-    #app { display:flex; height:100vh; width:100vw; }
-    .sidebar { width:240px; background:var(--bg-soft); border-right:1px solid var(--border); display:flex; flex-direction:column; }
-    .brand-section { height:56px; padding:0 16px; display:flex; align-items:center; border-bottom:1px solid var(--border-soft); }
-    .brand-logo { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; }
-    .brand-icon { width:32px; height:32px; border-radius:10px; background:var(--accent); color:var(--accent-ink); display:flex; align-items:center; justify-content:center; font-weight:800; }
-    .version-tag { font-size:10px; background:var(--surface-2); color:var(--accent); padding:2px 6px; border-radius:12px; }
-    .sidebar-nav { flex:1; padding:10px 8px; display:flex; flex-direction:column; gap:3px; }
-    .nav-label { font-size:11px; font-weight:600; text-transform:uppercase; color:var(--text-dim); padding:10px 8px 3px 8px; }
-    .nav-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:10px; color:var(--text-muted); cursor:pointer; font-weight:500; }
-    .nav-item:hover { background:var(--surface); color:var(--text); }
-    .nav-item.active { background:var(--surface); color:var(--accent-strong); font-weight:600; }
-    .sidebar-footer { padding:12px 14px; border-top:1px solid var(--border-soft); display:flex; justify-content:space-between; align-items:center; }
-    .active-host-badge { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-muted); }
-    .status-dot { width:8px; height:8px; border-radius:50%; background:var(--success); }
-    .main-wrapper { flex:1; display:flex; flex-direction:column; }
-    .top-header { height:56px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 18px; }
-    .breadcrumb-bar { font-size:13px; color:var(--accent); font-weight:600; }
-    .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:6px 12px; font-size:12.5px; font-weight:600; border-radius:10px; border:none; cursor:pointer; font-family:inherit; }
-    .btn-primary { background:var(--accent); color:var(--accent-ink); }
-    .btn-primary:hover { background:var(--accent-strong); }
-    .btn-secondary { background:var(--surface-2); color:var(--text); border:1px solid var(--border); }
-    .btn-icon { width:32px; height:32px; padding:0; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; background:var(--surface-2); border:1px solid var(--border); color:var(--text); cursor:pointer; }
-    .views-container { flex:1; position:relative; overflow:hidden; }
-    .view-panel { position:absolute; top:0; left:0; right:0; bottom:0; display:none; flex-direction:column; background:var(--bg); }
+    body, html { background-color:#0a0a0b !important; color:#d9d4c7 !important; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size:13.5px; height:100%; overflow:hidden; }
+    #app { display:flex; height:100vh; width:100vw; background-color:#0a0a0b; }
+    .sidebar { width:230px; background-color:#121213; border-right:1px solid #2b2b2e; display:flex; flex-direction:column; }
+    .brand-section { height:56px; padding:0 16px; display:flex; align-items:center; border-bottom:1px solid #1f1f21; }
+    .brand-logo { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; color:#ded0aa; }
+    .brand-icon { width:30px; height:30px; border-radius:8px; background-color:#cdbd94; color:#17150f; display:flex; align-items:center; justify-content:center; font-weight:800; }
+    .version-tag { font-size:10px; background-color:#222224; color:#cdbd94; padding:2px 6px; border-radius:10px; }
+    .sidebar-nav { flex:1; padding:10px 8px; display:flex; flex-direction:column; gap:4px; }
+    .nav-label { font-size:11px; font-weight:600; text-transform:uppercase; color:#5c5952; padding:8px 8px 3px 8px; }
+    .nav-item { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:8px; color:#8b877c; cursor:pointer; font-weight:500; }
+    .nav-item:hover { background-color:#19191b; color:#d9d4c7; }
+    .nav-item.active { background-color:#19191b; color:#ded0aa; font-weight:600; border-left:3px solid #cdbd94; }
+    .sidebar-footer { padding:12px 14px; border-top:1px solid #1f1f21; display:flex; justify-content:space-between; align-items:center; background-color:#121213; }
+    .active-host-badge { display:flex; align-items:center; gap:8px; font-size:12px; color:#8b877c; }
+    .status-dot { width:8px; height:8px; border-radius:50%; background-color:#7fbf8f; }
+    .main-wrapper { flex:1; display:flex; flex-direction:column; background-color:#0a0a0b; }
+    .top-header { height:56px; background-color:#19191b; border-bottom:1px solid #2b2b2e; display:flex; align-items:center; justify-content:space-between; padding:0 18px; }
+    .breadcrumb-bar { font-size:13px; color:#cdbd94; font-weight:600; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:8px; border:none; cursor:pointer; font-family:inherit; }
+    .btn-primary { background-color:#cdbd94; color:#17150f; }
+    .btn-primary:hover { background-color:#ded0aa; }
+    .btn-secondary { background-color:#222224; color:#d9d4c7; border:1px solid #2b2b2e; }
+    .btn-icon { width:30px; height:30px; padding:0; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background-color:#222224; border:1px solid #2b2b2e; color:#d9d4c7; cursor:pointer; }
+    .views-container { flex:1; position:relative; overflow:hidden; background-color:#0a0a0b; }
+    .view-panel { position:absolute; top:0; left:0; right:0; bottom:0; display:none; flex-direction:column; background-color:#0a0a0b; }
     .view-panel.active { display:flex; }
     .connections-view { padding:20px; overflow-y:auto; }
     .connection-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:14px; }
-    .conn-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:16px; display:flex; flex-direction:column; gap:10px; }
-    .protocol-badge { font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; background:rgba(205,189,148,0.15); color:var(--accent); border:1px solid rgba(205,189,148,0.3); }
-    .browser-toolbar { height:44px; background:var(--bg-soft); border-bottom:1px solid var(--border-soft); display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
+    .conn-card { background-color:#19191b; border:1px solid #2b2b2e; border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:10px; }
+    .protocol-badge { font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:6px; background-color:#222224; color:#cdbd94; border:1px solid #2b2b2e; }
+    .browser-toolbar { height:44px; background-color:#121213; border-bottom:1px solid #1f1f21; display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
     .file-viewport { flex:1; overflow-y:auto; padding:12px; }
     .file-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:10px; }
-    .file-card { background:var(--surface); border:1px solid var(--border-soft); border-radius:10px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; cursor:pointer; position:relative; }
-    .file-card:hover { background:var(--surface-2); border-color:var(--accent); }
-    .file-name { font-size:11.5px; font-weight:500; word-break:break-word; max-lines:2; }
-    .file-delete-btn { position:absolute; top:4px; right:4px; font-size:10px; background:rgba(224,108,117,0.2); color:var(--error); border:none; border-radius:4px; padding:2px 4px; cursor:pointer; display:none; }
+    .file-card { background-color:#19191b; border:1px solid #1f1f21; border-radius:10px; padding:12px 8px; display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; cursor:pointer; position:relative; }
+    .file-card:hover { background-color:#222224; border-color:#cdbd94; }
+    .file-name { font-size:11.5px; font-weight:500; color:#d9d4c7; word-break:break-word; }
+    .file-delete-btn { position:absolute; top:4px; right:4px; font-size:10px; background-color:#222224; color:#e06c75; border:1px solid #2b2b2e; border-radius:4px; padding:2px 4px; cursor:pointer; display:none; }
     .file-card:hover .file-delete-btn { display:block; }
     .dual-pane-container { flex:1; display:flex; }
-    .pane-half { flex:1; display:flex; flex-direction:column; border-right:1px solid var(--border); }
-    .pane-header { height:40px; background:var(--surface-2); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 12px; font-weight:600; color:var(--accent); }
-    .sync-bar-center { width:40px; background:var(--bg-soft); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; border-left:1px solid var(--border); border-right:1px solid var(--border); }
-    .editor-view { display:flex; flex-direction:column; background:var(--code-bg); }
-    .editor-tabs-bar { height:36px; background:var(--bg-soft); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 6px; }
-    .editor-tab { padding:5px 12px; background:var(--code-bg); color:var(--accent); font-size:12px; font-weight:600; border:1px solid var(--border); border-bottom:none; }
-    .editor-toolbar { height:38px; background:var(--surface); border-bottom:1px solid var(--border-soft); display:flex; align-items:center; justify-content:space-between; padding:0 12px; }
+    .pane-half { flex:1; display:flex; flex-direction:column; border-right:1px solid #2b2b2e; }
+    .pane-header { height:40px; background-color:#222224; border-bottom:1px solid #2b2b2e; display:flex; align-items:center; justify-content:space-between; padding:0 12px; font-weight:600; color:#cdbd94; }
+    .sync-bar-center { width:40px; background-color:#121213; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; border-left:1px solid #2b2b2e; border-right:1px solid #2b2b2e; }
+    .editor-view { display:flex; flex-direction:column; background-color:#101011; }
+    .editor-tabs-bar { height:36px; background-color:#121213; border-bottom:1px solid #2b2b2e; display:flex; align-items:center; padding:0 6px; }
+    .editor-tab { padding:5px 12px; background-color:#101011; color:#cdbd94; font-size:12px; font-weight:600; border:1px solid #2b2b2e; border-bottom:none; }
+    .editor-toolbar { height:38px; background-color:#19191b; border-bottom:1px solid #1f1f21; display:flex; align-items:center; justify-content:space-between; padding:0 12px; }
     .editor-main { flex:1; display:flex; }
-    .code-textarea { flex:1; background:transparent; color:var(--text); caret-color:var(--accent); padding:10px 12px; font-family:Consolas, monospace; font-size:12.5px; border:none; outline:none; resize:none; white-space:pre; }
-    .editor-status-bar { height:24px; background:var(--surface); border-top:1px solid var(--border-soft); display:flex; align-items:center; justify-content:space-between; padding:0 10px; font-size:11px; font-family:Consolas, monospace; color:var(--text-muted); }
-    .terminal-view { background:#000; display:flex; flex-direction:column; }
-    .terminal-header { height:38px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 12px; }
-    .terminal-snippets { background:var(--bg-soft); border-bottom:1px solid var(--border-soft); padding:5px 10px; display:flex; gap:6px; overflow-x:auto; }
-    .snippet-chip { background:var(--surface-2); border:1px solid var(--border); color:var(--accent); font-family:Consolas, monospace; font-size:11px; padding:2px 8px; border-radius:6px; cursor:pointer; }
-    .snippet-chip:hover { background:var(--accent); color:var(--accent-ink); }
-    .terminal-body { flex:1; padding:12px; font-family:Consolas, monospace; font-size:12px; color:#d9d4c7; overflow-y:auto; white-space:pre-wrap; }
-    .terminal-prompt-line { display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--surface); border-top:1px solid var(--border-soft); }
-    .terminal-input { flex:1; background:transparent; border:none; outline:none; font-family:Consolas, monospace; font-size:12.5px; color:var(--accent-strong); }
-    .modal-backdrop { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); display:none; align-items:center; justify-content:center; z-index:1000; }
+    .code-textarea { flex:1; background-color:#101011; color:#d9d4c7; caret-color:#cdbd94; padding:10px 12px; font-family:Consolas, monospace; font-size:12.5px; border:none; outline:none; resize:none; white-space:pre; }
+    .editor-status-bar { height:24px; background-color:#19191b; border-top:1px solid #1f1f21; display:flex; align-items:center; justify-content:space-between; padding:0 10px; font-size:11px; font-family:Consolas, monospace; color:#8b877c; }
+    .terminal-view { background-color:#000000; display:flex; flex-direction:column; }
+    .terminal-header { height:38px; background-color:#19191b; border-bottom:1px solid #2b2b2e; display:flex; align-items:center; justify-content:space-between; padding:0 12px; }
+    .terminal-snippets { background-color:#121213; border-bottom:1px solid #1f1f21; padding:5px 10px; display:flex; gap:6px; overflow-x:auto; }
+    .snippet-chip { background-color:#222224; border:1px solid #2b2b2e; color:#cdbd94; font-family:Consolas, monospace; font-size:11px; padding:2px 8px; border-radius:6px; cursor:pointer; }
+    .snippet-chip:hover { background-color:#cdbd94; color:#17150f; }
+    .terminal-body { flex:1; padding:12px; font-family:Consolas, monospace; font-size:12px; color:#d9d4c7; overflow-y:auto; white-space:pre-wrap; background-color:#050505; }
+    .terminal-prompt-line { display:flex; align-items:center; gap:8px; padding:6px 12px; background-color:#19191b; border-top:1px solid #1f1f21; }
+    .terminal-input { flex:1; background-color:transparent; border:none; outline:none; font-family:Consolas, monospace; font-size:12.5px; color:#ded0aa; }
+    .modal-backdrop { position:fixed; top:0; left:0; right:0; bottom:0; background-color:rgba(0,0,0,0.75); display:none; align-items:center; justify-content:center; z-index:1000; }
     .modal-backdrop.active { display:flex; }
-    .modal-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; width:100%; max-width:480px; }
-    .modal-header { padding:14px 18px; border-bottom:1px solid var(--border-soft); display:flex; justify-content:space-between; align-items:center; }
+    .modal-card { background-color:#19191b; border:1px solid #2b2b2e; border-radius:14px; width:100%; max-width:460px; color:#d9d4c7; }
+    .modal-header { padding:14px 18px; border-bottom:1px solid #1f1f21; display:flex; justify-content:space-between; align-items:center; }
     .modal-body { padding:18px; display:flex; flex-direction:column; gap:12px; }
     .form-group { display:flex; flex-direction:column; gap:4px; }
-    .form-label { font-size:12px; font-weight:600; color:var(--text-muted); }
-    .form-control { background:var(--bg-soft); border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:13px; color:var(--text); outline:none; }
+    .form-label { font-size:12px; font-weight:600; color:#8b877c; }
+    .form-control { background-color:#121213; border:1px solid #2b2b2e; border-radius:8px; padding:8px 10px; font-size:13px; color:#d9d4c7; outline:none; }
     .form-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    .modal-footer { padding:12px 18px; border-top:1px solid var(--border-soft); background:var(--bg-soft); display:flex; justify-content:flex-end; gap:8px; }
+    .modal-footer { padding:12px 18px; border-top:1px solid #1f1f21; background-color:#121213; display:flex; justify-content:flex-end; gap:8px; }
     #toast-container { position:fixed; top:16px; right:16px; z-index:9999; display:flex; flex-direction:column; gap:6px; }
-    .toast { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; font-size:12.5px; color:var(--text); }
+    .toast { background-color:#19191b; border:1px solid #2b2b2e; border-radius:8px; padding:10px 14px; font-size:12.5px; color:#d9d4c7; box-shadow:0 4px 12px rgba(0,0,0,0.5); }
   </style>
 </head>
 <body>
 <div id=""app"">
-  <aside class=""sidebar"">
+  <div class=""sidebar"">
     <div class=""brand-section"">
       <div class=""brand-logo"">
-        <div class=""brand-icon"">⚡</div>
+        <div class=""brand-icon"">M</div>
         <div>
           <span>MYSFTP</span>
-          <span class=""version-tag"">v1.1.0</span>
+          <span class=""version-tag"">v1.2.0</span>
         </div>
       </div>
     </div>
-    <nav class=""sidebar-nav"">
+    <div class=""sidebar-nav"">
       <div class=""nav-label"">Navigasi Utama</div>
-      <a class=""nav-item active"" data-view=""connections"">
-        <span>🌐</span> <span>Koneksi Server</span>
-      </a>
-      <a class=""nav-item"" data-view=""browser"">
+      <div class=""nav-item active"" data-view=""connections"">
+        <span>●</span> <span>Koneksi Server</span>
+      </div>
+      <div class=""nav-item"" data-view=""browser"">
         <span>📁</span> <span>File Explorer (Full)</span>
-      </a>
-      <a class=""nav-item"" data-view=""dualpane"">
+      </div>
+      <div class=""nav-item"" data-view=""dualpane"">
         <span>🔀</span> <span>Dual-Pane Transfer</span>
-      </a>
-      <a class=""nav-item"" data-view=""editor"">
+      </div>
+      <div class=""nav-item"" data-view=""editor"">
         <span>📝</span> <span>Pro Code Editor</span>
-      </a>
+      </div>
       <div class=""nav-label"">Developer Tools</div>
-      <a class=""nav-item"" data-view=""terminal"">
-        <span>💻</span> <span>SSH Terminal (Termius)</span>
-      </a>
-    </nav>
+      <div class=""nav-item"" data-view=""terminal"">
+        <span>💻</span> <span>SSH Terminal</span>
+      </div>
+    </div>
     <div class=""sidebar-footer"">
       <div class=""active-host-badge"">
         <span class=""status-dot""></span>
         <span id=""active-session-label"">PC Native Engine</span>
       </div>
-      <button class=""btn-icon"" id=""btn-info"" title=""Tentang Pengembang"">ℹ️</button>
+      <button class=""btn-icon"" id=""btn-info"" title=""Tentang Pengembang"">i</button>
     </div>
-  </aside>
+  </div>
 
-  <main class=""main-wrapper"">
-    <header class=""top-header"">
+  <div class=""main-wrapper"">
+    <div class=""top-header"">
       <div class=""breadcrumb-bar"" id=""breadcrumb-bar"">
         <span class=""crumb-segment active"">📁 / (root)</span>
       </div>
       <div style=""display:flex; gap:8px;"">
         <button class=""btn btn-primary"" id=""btn-top-action"">+ Koneksi Baru</button>
       </div>
-    </header>
+    </div>
 
     <div class=""views-container"">
       <!-- CONNECTIONS -->
-      <section class=""view-panel connections-view active"" id=""view-connections"">
+      <div class=""view-panel connections-view active"" id=""view-connections"">
         <div style=""display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;"">
           <div>
-            <h2 style=""font-size:18px; font-weight:700; color:var(--text);"">Profil Koneksi Server</h2>
-            <p style=""font-size:12px; color:var(--text-muted);"">Kelola server SFTP, FTP, AWS S3, atau File Lokal PC Anda.</p>
+            <h2 style=""font-size:18px; font-weight:700; color:#d9d4c7;"">Profil Koneksi Server</h2>
+            <p style=""font-size:12px; color:#8b877c;"">Kelola server SFTP, FTP, AWS S3, atau File Lokal PC Anda.</p>
           </div>
           <button class=""btn btn-primary"" onclick=""Connections.openAddModal()"">+ Tambah Profil</button>
         </div>
         <div class=""connection-grid"" id=""connection-grid-container""></div>
-      </section>
+      </div>
 
       <!-- FILE EXPLORER (FULL WIDTH) -->
-      <section class=""view-panel"" id=""view-browser"">
+      <div class=""view-panel"" id=""view-browser"">
         <div class=""browser-toolbar"">
           <div style=""display:flex; gap:6px;"">
             <button class=""btn btn-secondary btn-icon"" onclick=""FileBrowser.goUp()"" title=""Ke Folder Induk"">▲</button>
@@ -378,10 +381,10 @@ namespace MYSFTP
         <div class=""file-viewport"" id=""file-viewport"">
           <div id=""file-content-render""></div>
         </div>
-      </section>
+      </div>
 
       <!-- DUAL PANE -->
-      <section class=""view-panel"" id=""view-dualpane"">
+      <div class=""view-panel"" id=""view-dualpane"">
         <div class=""dual-pane-container"">
           <div class=""pane-half"">
             <div class=""pane-header"">
@@ -391,8 +394,8 @@ namespace MYSFTP
             <div class=""file-viewport"" id=""left-pane-viewport""></div>
           </div>
           <div class=""sync-bar-center"">
-            <button class=""btn-icon"" onclick=""App.toast('Mentransfer berkas ke Remote...', 'success')"" style=""background:var(--accent); color:var(--accent-ink); font-weight:bold;"">▶</button>
-            <button class=""btn-icon"" onclick=""App.toast('Mengunduh berkas ke Laptop...', 'success')"" style=""background:var(--accent); color:var(--accent-ink); font-weight:bold;"">◀</button>
+            <button class=""btn-icon"" onclick=""App.toast('Mentransfer berkas ke Remote...', 'success')"" style=""background-color:#cdbd94; color:#17150f; font-weight:bold;"">▶</button>
+            <button class=""btn-icon"" onclick=""App.toast('Mengunduh berkas ke Laptop...', 'success')"" style=""background-color:#cdbd94; color:#17150f; font-weight:bold;"">◀</button>
           </div>
           <div class=""pane-half"">
             <div class=""pane-header"">
@@ -402,16 +405,16 @@ namespace MYSFTP
             <div class=""file-viewport"" id=""right-pane-viewport""></div>
           </div>
         </div>
-      </section>
+      </div>
 
       <!-- PRO CODE EDITOR -->
-      <section class=""view-panel editor-view"" id=""view-editor"">
+      <div class=""view-panel editor-view"" id=""view-editor"">
         <div class=""editor-tabs-bar"" id=""editor-tabs-bar""></div>
         <div class=""editor-toolbar"">
           <div style=""display:flex; gap:6px;"">
             <button class=""btn btn-primary"" onclick=""Editor.saveActiveFile()"">💾 Simpan (Ctrl+S)</button>
           </div>
-          <span id=""editor-current-path"" style=""font-size:12px; color:var(--text-muted); font-family:Consolas, monospace;""></span>
+          <span id=""editor-current-path"" style=""font-size:12px; color:#8b877c; font-family:Consolas, monospace;""></span>
         </div>
         <div class=""editor-main"">
           <textarea class=""code-textarea"" id=""code-editor-input"" spellcheck=""false"" placeholder=""// Buka berkas dari explorer atau mulai mengetik...""></textarea>
@@ -421,16 +424,16 @@ namespace MYSFTP
           <span id=""sb-lines-count"">1 Baris</span>
           <span id=""sb-encoding"">UTF-8</span>
         </div>
-      </section>
+      </div>
 
       <!-- TERMINAL (TERMIUS HYBRID) -->
-      <section class=""view-panel terminal-view"" id=""view-terminal"">
+      <div class=""view-panel terminal-view"" id=""view-terminal"">
         <div class=""terminal-header"">
-          <span style=""font-size:13px; font-weight:700; color:var(--accent);"">💻 SSH Terminal Console (Termius Style)</span>
+          <span style=""font-size:13px; font-weight:700; color:#cdbd94;"">💻 SSH Terminal Console (Termius Style)</span>
           <button class=""btn btn-secondary btn-icon"" onclick=""Terminal.clear()"">🧹</button>
         </div>
         <div class=""terminal-snippets"">
-          <span style=""font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:600;"">Pintasan:</span>
+          <span style=""font-size:11px; color:#5c5952; text-transform:uppercase; font-weight:600;"">Pintasan:</span>
           <span class=""snippet-chip"" onclick=""Terminal.run('ls -la')"">ls -la</span>
           <span class=""snippet-chip"" onclick=""Terminal.run('df -h')"">df -h</span>
           <span class=""snippet-chip"" onclick=""Terminal.run('free -m')"">free -m</span>
@@ -440,20 +443,20 @@ namespace MYSFTP
         </div>
         <div class=""terminal-body"" id=""terminal-body""></div>
         <div class=""terminal-prompt-line"">
-          <span style=""color:var(--success); font-weight:bold;"">mysftp@remote:~$</span>
+          <span style=""color:#7fbf8f; font-weight:bold;"">mysftp@remote:~$</span>
           <input type=""text"" class=""terminal-input"" id=""terminal-command-input"" placeholder=""Ketik perintah di sini..."" autocomplete=""off"">
           <button class=""btn btn-primary"" onclick=""Terminal.execute()"">Kirim</button>
         </div>
-      </section>
+      </div>
     </div>
-  </main>
+  </div>
 </div>
 
 <!-- Modal Connection -->
 <div class=""modal-backdrop"" id=""modal-connection"">
   <div class=""modal-card"">
     <div class=""modal-header"">
-      <h3 style=""font-size:15px; font-weight:700; color:var(--text);"">Tambah Profil Koneksi</h3>
+      <h3 style=""font-size:15px; font-weight:700; color:#d9d4c7;"">Tambah Profil Koneksi</h3>
       <button class=""btn-icon"" onclick=""App.closeModal('modal-connection')"">✕</button>
     </div>
     <form onsubmit=""event.preventDefault(); Connections.saveFromModal();"">
@@ -535,9 +538,9 @@ var App = {
     if (info) {
       info.onclick = function() {
         if (window.external && window.external.ShowMessage) {
-          window.external.ShowMessage('⚡ MYSFTP v1.1.0 (Desktop Edition)\nPengembang: ZellRayy\nWhatsApp: 082352052566\nTelegram: @BhuzelRayhan\nGitHub: https://github.com/Bhuzel/MYSFTP', 'Tentang MYSFTP');
+          window.external.ShowMessage('⚡ MYSFTP v1.2.0 (Desktop Edition)\nPengembang: ZellRayy\nWhatsApp: 082352052566\nTelegram: @BhuzelRayhan\nGitHub: https://github.com/Bhuzel/MYSFTP', 'Tentang MYSFTP');
         } else {
-          alert('⚡ MYSFTP v1.1.0 (Desktop Edition)\nPengembang: ZellRayy\nWhatsApp: 082352052566\nTelegram: @BhuzelRayhan\nGitHub: https://github.com/Bhuzel/MYSFTP');
+          alert('⚡ MYSFTP v1.2.0 (Desktop Edition)\nPengembang: ZellRayy\nWhatsApp: 082352052566\nTelegram: @BhuzelRayhan\nGitHub: https://github.com/Bhuzel/MYSFTP');
         }
       };
     }
@@ -578,14 +581,20 @@ var App = {
 var Connections = {
   list: [],
   init: function() {
-    try {
-      var s = localStorage.getItem('mysftp_conns');
-      this.list = s ? JSON.parse(s) : [
+    var jsonStr = '';
+    if (window.external && window.external.LoadProfiles) {
+      jsonStr = window.external.LoadProfiles();
+    }
+    if (jsonStr) {
+      try {
+        this.list = JSON.parse(jsonStr);
+      } catch(e) { this.list = []; }
+    } else {
+      this.list = [
         { id: '1', name: '💻 Local Drive (Laptop)', protocol: 'LOCAL', host: 'localhost', port: 22, username: 'local' },
-        { id: '2', name: '🌐 Production Web VPS', protocol: 'SFTP', host: '103.145.226.88', port: 22, username: 'root' },
-        { id: '3', name: '⚡ Backup Server FTP', protocol: 'FTP', host: 'ftp.backup.net', port: 21, username: 'admin' }
+        { id: '2', name: '🌐 Production VPS', protocol: 'SFTP', host: '103.145.226.88', port: 22, username: 'root' }
       ];
-    } catch(e) { this.list = []; }
+    }
     this.render();
   },
   render: function() {
@@ -599,10 +608,10 @@ var Connections = {
           '<span class=""protocol-badge"">' + conn.protocol + '</span>' +
           '<button class=""btn-icon"" style=""width:24px; height:24px; font-size:11px;"" onclick=""Connections.delete(\'' + conn.id + '\')"">🗑️</button>' +
         '</div>' +
-        '<div style=""font-weight:700; font-size:15px;"">' + conn.name + '</div>' +
-        '<div style=""font-size:12px; color:var(--text-muted); font-family:Consolas, monospace;"">' + conn.username + '@' + conn.host + ':' + conn.port + '</div>' +
-        '<div style=""margin-top:auto; display:flex; gap:6px; padding-top:8px; border-top:1px solid var(--border-soft);"">' +
-          '<button class=""btn btn-secondary"" style=""flex:1;"" onclick=""App.toast(\'Respon ping ' + conn.host + ': 28ms\')"">⚡ Ping</button>' +
+        '<div style=""font-weight:700; font-size:15px; color:#ded0aa;"">' + conn.name + '</div>' +
+        '<div style=""font-size:12px; color:#8b877c; font-family:Consolas, monospace;"">' + conn.username + '@' + conn.host + ':' + conn.port + '</div>' +
+        '<div style=""margin-top:auto; display:flex; gap:6px; padding-top:8px; border-top:1px solid #1f1f21;"">' +
+          '<button class=""btn btn-secondary"" style=""flex:1;"" onclick=""App.toast(\'Respon ping ' + conn.host + ': 24ms\')"">⚡ Ping</button>' +
           '<button class=""btn btn-primary"" style=""flex:2;"" onclick=""Connections.connect(\'' + conn.id + '\')"">🚀 Buka</button>' +
         '</div>' +
       '</div>';
@@ -624,10 +633,13 @@ var Connections = {
     var port = parseInt(document.getElementById('conn-port').value, 10) || 22;
     var username = document.getElementById('conn-user').value;
     this.list.unshift({ id: id, name: name, protocol: protocol, host: host, port: port, username: username });
-    try { localStorage.setItem('mysftp_conns', JSON.stringify(this.list)); } catch(e){}
+    var jsonStr = JSON.stringify(this.list);
+    if (window.external && window.external.SaveProfiles) {
+      window.external.SaveProfiles(jsonStr);
+    }
     this.render();
     App.closeModal('modal-connection');
-    App.toast('Profil koneksi tersimpan!');
+    App.toast('Profil koneksi tersimpan permanen!');
   },
   delete: function(id) {
     if (!confirm('Hapus koneksi ini?')) return;
@@ -636,11 +648,14 @@ var Connections = {
       if (this.list[i].id !== id) newList.push(this.list[i]);
     }
     this.list = newList;
-    try { localStorage.setItem('mysftp_conns', JSON.stringify(this.list)); } catch(e){}
+    var jsonStr = JSON.stringify(this.list);
+    if (window.external && window.external.SaveProfiles) {
+      window.external.SaveProfiles(jsonStr);
+    }
     this.render();
   },
   connect: function(id) {
-    App.toast('Membuka sesi...');
+    App.toast('Membuka sesi explorer...');
     App.switchView('browser');
     FileBrowser.load('.');
   }
@@ -694,7 +709,7 @@ var FileBrowser = {
         '<button class=""file-delete-btn"" onclick=""event.stopPropagation(); FileBrowser.deleteItem(\'' + safePath + '\')"">✕</button>' +
         '<div style=""font-size:26px;"">' + (item.isDirectory ? '📁' : '📄') + '</div>' +
         '<div class=""file-name"">' + item.name + '</div>' +
-        '<div style=""font-size:10.5px; color:var(--text-dim);"">' + (item.isDirectory ? 'Folder' : (item.size/1024).toFixed(1) + ' KB') + '</div>' +
+        '<div style=""font-size:10.5px; color:#8b877c;"">' + (item.isDirectory ? 'Folder' : (item.size/1024).toFixed(1) + ' KB') + '</div>' +
       '</div>';
     }
     html += '</div>';
@@ -760,7 +775,7 @@ var Terminal = {
         if (e.keyCode === 13) Terminal.execute();
       };
     }
-    this.print('\x1b[33m★ MYSFTP SSH Terminal Console v1.1.0 (Termius Edition)\x1b[0m\r\nType commands or click quick snippet buttons.\r\n');
+    this.print('\x1b[33m★ MYSFTP SSH Terminal Console v1.2.0 (Termius Edition)\x1b[0m\r\nType commands or click quick snippet buttons.\r\n');
   },
   run: function(cmd) {
     document.getElementById('terminal-command-input').value = cmd;
@@ -787,7 +802,7 @@ var Terminal = {
                       .replace(/\x1b\[0m/g, '</span>');
     b.scrollTop = b.scrollHeight;
   },
-  clear: function() { document.getElementById('terminal-body').innerHTML = ''; }
+  clear() { document.getElementById('terminal-body').innerHTML = ''; }
 };
 
 window.onload = function() { App.init(); };
@@ -799,7 +814,6 @@ window.onload = function() { App.init(); };
         [STAThread]
         static void Main()
         {
-            // Set modern IE11 emulation for WebBrowser control so modern HTML/CSS/JS runs smoothly
             try
             {
                 string appName = Path.GetFileName(Application.ExecutablePath);

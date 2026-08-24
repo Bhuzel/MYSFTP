@@ -177,14 +177,14 @@ fun TerminalScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { vm.disconnect(); onBack() }) {
+                    IconButton(onClick = { onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali")
                     }
                 },
                 actions = {
 
                     // Zoom Out & In Font
-                    IconButton(onClick = { fontSizeSp = (fontSizeSp - 1f).coerceAtLeast(1f) }) {
+                    IconButton(onClick = { fontSizeSp = (fontSizeSp - 1f).coerceAtLeast(6f) }) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "Perkecil Font", modifier = Modifier.size(18.dp))
                     }
                     IconButton(onClick = { fontSizeSp = (fontSizeSp + 1f).coerceAtMost(24f) }) {
@@ -205,6 +205,8 @@ fun TerminalScreen(
         Column(
             Modifier.fillMaxSize().padding(padding).background(termBg)
         ) {
+            val horizScrollState = rememberScrollState()
+
             // Kontainer Terminal Emulator
             BoxWithConstraints(
                 Modifier
@@ -244,19 +246,34 @@ fun TerminalScreen(
                     val cursorRow = snapshot.cursorRow
                     val cursorCol = snapshot.cursorCol
                     val showCursor = snapshot.showCursor
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    androidx.compose.foundation.text.selection.SelectionContainer(
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        items(count = snapshot.lines.size, key = { it }) { rowIdx ->
-                            val line = snapshot.lines[rowIdx]
-                            val cursorHere = showCursor && rowIdx == cursorRow
-                            val annotated = remember(line, cursorHere, cursorCol, snapshot.revision, cursorAlpha) {
-                                renderLine(line, if (cursorHere) cursorCol else -1, cursorAlpha)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .horizontalScroll(horizScrollState)
+                        ) {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                items(count = snapshot.lines.size, key = { it }) { rowIdx ->
+                                    val line = snapshot.lines[rowIdx]
+                                    val cursorHere = showCursor && rowIdx == cursorRow
+                                    val annotated = remember(line, cursorHere, cursorCol, snapshot.revision, cursorAlpha) {
+                                        renderLine(line, if (cursorHere) cursorCol else -1, cursorAlpha)
+                                    }
+                                    Text(
+                                        text = annotated,
+                                        style = textStyle,
+                                        softWrap = false,
+                                        maxLines = 1
+                                    )
+                                }
                             }
-                            Text(text = annotated, style = textStyle, softWrap = false, maxLines = 1)
                         }
                     }
                 }

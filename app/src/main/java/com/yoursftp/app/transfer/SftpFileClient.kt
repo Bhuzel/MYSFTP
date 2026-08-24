@@ -71,26 +71,58 @@ class SftpFileClient(private val context: Context, private val conn: Connection)
         session = null
     }
 
-    private fun requireChannel(): ChannelSftp =
-        channel ?: throw IllegalStateException("SFTP belum terhubung")
+    @Synchronized
+    private fun requireChannel(): ChannelSftp {
+        var ch = channel
+        var s = session
+        if (ch == null || !ch.isConnected || s == null || !s.isConnected) {
+            runCatching { disconnect() }
+            connect()
+            ch = channel
+        }
+        return ch ?: throw IllegalStateException("SFTP belum terhubung")
+    }
 
     @Suppress("UNCHECKED_CAST")
     override fun list(path: String): List<RemoteFile> {
-        val ch = requireChannel()
-        val entries = ch.ls(path) as java.util.Vector<ChannelSftp.LsEntry>
-        return entries
-            .filter { it.filename != "." && it.filename != ".." }
-            .map {
-                val attrs = it.attrs
-                RemoteFile(
-                    name = it.filename,
-                    path = joinPath(path, it.filename),
-                    isDirectory = attrs.isDir,
-                    size = attrs.size,
-                    lastModified = attrs.mTime.toLong() * 1000L
-                )
+        return try {
+            val ch = requireChannel()
+            val entries = ch.ls(path) as java.util.Vector<ChannelSftp.LsEntry>
+            entries
+                .filter { it.filename != "." && it.filename != ".." }
+                .map {
+                    val attrs = it.attrs
+                    RemoteFile(
+                        name = it.filename,
+                        path = joinPath(path, it.filename),
+                        isDirectory = attrs.isDir,
+                        size = attrs.size,
+                        lastModified = attrs.mTime.toLong() * 1000L
+                    )
+                }
+                .sortedWith(compareByDescending<RemoteFile> { it.isDirectory }.thenBy { it.name.lowercase() })
+        } catch (e: Exception) {
+            if (e.message?.contains("Pipe closed", ignoreCase = true) == true || !isConnected) {
+                runCatching { disconnect() }
+                val ch = requireChannel()
+                val entries = ch.ls(path) as java.util.Vector<ChannelSftp.LsEntry>
+                entries
+                    .filter { it.filename != "." && it.filename != ".." }
+                    .map {
+                        val attrs = it.attrs
+                        RemoteFile(
+                            name = it.filename,
+                            path = joinPath(path, it.filename),
+                            isDirectory = attrs.isDir,
+                            size = attrs.size,
+                            lastModified = attrs.mTime.toLong() * 1000L
+                        )
+                    }
+                    .sortedWith(compareByDescending<RemoteFile> { it.isDirectory }.thenBy { it.name.lowercase() })
+            } else {
+                throw e
             }
-            .sortedWith(compareByDescending<RemoteFile> { it.isDirectory }.thenBy { it.name.lowercase() })
+        }
     }
 
     override fun download(path: String, progressListener: ProgressListener?): ByteArray {
@@ -103,7 +135,7 @@ class SftpFileClient(private val context: Context, private val conn: Connection)
         val out = if (totalBytes > 0) ByteArrayOutputStream(totalBytes.toInt()) else ByteArrayOutputStream()
         val inputStream = java.io.BufferedInputStream(ch.get(path), 65536)
         try {
-            val buffer = ByteArray(65536) // 64 KB optimized buffer size
+            val buffer = ByteArray(65536)
             var bytesRead: Int
             var totalRead = 0L
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
@@ -123,7 +155,7 @@ class SftpFileClient(private val context: Context, private val conn: Connection)
         try {
             val totalBytes = data.size.toLong()
             var offset = 0
-            val bufferSize = 65536 // 64 KB optimized buffer size
+            val bufferSize = 65536
             while (offset < data.size) {
                 val len = (data.size - offset).coerceAtMost(bufferSize)
                 outStream.write(data, offset, len)
