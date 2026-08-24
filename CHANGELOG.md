@@ -1,4 +1,4 @@
-# MYSFTP v1.9.3 — Perbaikan & Instalasi Dedicated Suite
+# MYSFTP v1.9.4 — Perbaikan & Instalasi Dedicated Suite
 
 ## Apa yang diperbaiki
 

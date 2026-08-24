@@ -27,11 +27,3 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
-
-# Binaries & Generated Build Outputs
-*.exe
-MYSFTP.exe
-MYSFTP-Setup.exe
-loading.html
-installer/files/
-build-artifacts/

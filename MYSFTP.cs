@@ -386,12 +386,38 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v193");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v194");
             }
             catch { }
 
             dataDir = AppDomain.CurrentDomain.BaseDirectory;
-            profilesFile = Path.Combine(dataDir, "connections.json");
+
+            // ── Fix: "gagal menyimpan profil VPS" ──
+            // connections.json used to be written next to the exe, which on a
+            // default install lives under C:\Program Files\MYSFTP — a folder
+            // normal (non-admin) users cannot write to. Saving a profile would
+            // silently fail there. User data now always lives in the per-user,
+            // always-writable LocalAppData folder instead, regardless of where
+            // the app itself is installed.
+            string userDataDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MYSFTP");
+            try { Directory.CreateDirectory(userDataDir); } catch { }
+            profilesFile = Path.Combine(userDataDir, "connections.json");
+
+            // One-time migration: if an older install already saved profiles
+            // next to the exe (from before this fix) and the new location is
+            // still empty, bring the old data over so nobody loses their saved
+            // servers just because of this change.
+            try
+            {
+                string legacyProfilesFile = Path.Combine(dataDir, "connections.json");
+                if (!File.Exists(profilesFile) && File.Exists(legacyProfilesFile))
+                {
+                    File.Copy(legacyProfilesFile, profilesFile, false);
+                }
+            }
+            catch { }
 
             // Find a free TCP port. Retry a few times: on a freshly-installed
             // machine antivirus/EDR sometimes holds a just-picked ephemeral port
@@ -581,7 +607,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v193\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v194\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -691,8 +717,18 @@ namespace MYSFTP
                 else if (path == "/api/profiles" && req.HttpMethod == "POST")
                 {
                     string body = ReadBody(req);
-                    File.WriteAllText(profilesFile, body, Encoding.UTF8);
-                    SendJson(res, "{\"success\":true}");
+                    try
+                    {
+                        File.WriteAllText(profilesFile, body, Encoding.UTF8);
+                        SendJson(res, "{\"success\":true}");
+                    }
+                    catch (Exception exWrite)
+                    {
+                        // Surface a real, readable reason (permission denied, disk
+                        // full, path missing, etc.) instead of a generic 500 the
+                        // client used to ignore anyway.
+                        SendJson(res, "{\"success\":false,\"error\":\"" + EscapeJson(exWrite.Message) + "\"}");
+                    }
                 }
                 else if (path == "/api/connect" && req.HttpMethod == "POST")
                 {
@@ -1397,7 +1433,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.3 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.4 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1735,24 +1771,45 @@ namespace MYSFTP
         username: document.getElementById('f-user').value,
         password: document.getElementById('f-pass').value
       };
+      var prevProfiles = profiles.slice();
       profiles.unshift(item);
       fetch('/api/profiles', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify(profiles)
-      }).then(function() {
-        closeModal();
-        renderCards();
-        toast('Profil server berhasil disimpan!');
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d && d.success) {
+          closeModal();
+          renderCards();
+          toast('Profil server berhasil disimpan!');
+        } else {
+          profiles = prevProfiles; // roll back so the UI doesn't show an item that wasn't actually saved
+          toast('❌ Gagal menyimpan: ' + (d && d.error ? d.error : 'Tidak diketahui'));
+        }
+      }).catch(function(err) {
+        profiles = prevProfiles;
+        toast('❌ Gagal menyimpan: ' + err.message);
       });
     }
 
     function delProfile(id) {
       if (!confirm('Hapus profil koneksi ini?')) return;
+      var prevProfiles = profiles.slice();
       profiles = profiles.filter(function(x){return x.id!==id;});
-      fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)}).then(function(){
+      fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)})
+        .then(function(r){ return r.json(); }).then(function(d) {
+        if (d && d.success) {
+          renderCards();
+          toast('Profil dihapus.');
+        } else {
+          profiles = prevProfiles;
+          renderCards();
+          toast('❌ Gagal menghapus: ' + (d && d.error ? d.error : 'Tidak diketahui'));
+        }
+      }).catch(function(err) {
+        profiles = prevProfiles;
         renderCards();
-        toast('Profil dihapus.');
+        toast('❌ Gagal menghapus: ' + err.message);
       });
     }
 
