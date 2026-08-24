@@ -34,7 +34,9 @@ import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.font.FontFamily
 import com.yoursftp.app.ota.OtaState
+import com.yoursftp.app.transfer.SessionManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -428,15 +430,6 @@ private fun ConnectionCard(
     onDelete: () -> Unit,
     onOpenTerminal: () -> Unit
 ) {
-    ElevatedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onConnect() },
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
     val isLiveSession = SessionManager.getActive(conn.id) != null
 
     Card(
