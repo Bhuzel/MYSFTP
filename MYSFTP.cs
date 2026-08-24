@@ -44,7 +44,7 @@ namespace MYSFTP
             connected = true;
         }
 
-        public string RunCommand(string command, int timeoutMs = 12000)
+        public string RunCommand(string command, int timeoutMs = 8000)
         {
             if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
 
@@ -53,8 +53,9 @@ namespace MYSFTP
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=6 -o BatchMode=no -p " + port + " " + user + "@" + host + " " + command;
                 psi.UseShellExecute = false;
+                psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.CreateNoWindow = true;
@@ -65,12 +66,28 @@ namespace MYSFTP
                 psi.EnvironmentVariables["DISPLAY"] = ":0";
 
                 Process p = Process.Start(psi);
-                string stdout = p.StandardOutput.ReadToEnd();
-                string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(timeoutMs);
-                if (!p.HasExited) try { p.Kill(); } catch { }
+                try { p.StandardInput.Close(); } catch { }
 
+                StringBuilder outSb = new StringBuilder();
+                StringBuilder errSb = new StringBuilder();
+                p.OutputDataReceived += (s, ev) => { if (ev.Data != null) outSb.AppendLine(ev.Data); };
+                p.ErrorDataReceived += (s, ev) => { if (ev.Data != null) errSb.AppendLine(ev.Data); };
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (!p.WaitForExit(timeoutMs))
+                {
+                    try { p.Kill(); } catch { }
+                    return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
+                }
+
+                string stdout = outSb.ToString().Trim();
+                string stderr = errSb.ToString().Trim();
                 return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
+            }
+            catch (Exception ex)
+            {
+                return "SSH Error: " + ex.Message;
             }
             finally
             {
@@ -386,7 +403,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v196");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v197");
             }
             catch { }
 
@@ -607,7 +624,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v196\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v197\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -1452,7 +1469,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.6 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.7 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1886,10 +1903,14 @@ namespace MYSFTP
       btn.innerHTML = '⏳ Menghubungkan...';
       btn.disabled = true;
       showLoader(true);
+      document.getElementById('connect-error').style.display = 'none';
+
+      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 14000) : null;
 
       fetch('/api/connect', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify({
           name: p.name,
           protocol: p.protocol,
@@ -1897,15 +1918,20 @@ namespace MYSFTP
           port: p.port,
           username: p.username,
           password: pw
-        })
-      }).then(function(r){return r.json();}).then(function(res) {
+        }),
+        signal: ctrl ? ctrl.signal : undefined
+      }).then(function(r){
+        if (timer) clearTimeout(timer);
+        return r.json();
+      }).then(function(res) {
         btn.innerHTML = '🚀 Hubungkan';
         btn.disabled = false;
         showLoader(false);
 
         if (res.success) {
           p.password = pw;
-          fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)});
+          try { localStorage.setItem('mysftp_profiles', JSON.stringify(profiles)); } catch(e){}
+          fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json; charset=utf-8'},body:JSON.stringify(profiles)}).catch(function(){});
 
           connected = true;
           connProfile = p;
@@ -1929,10 +1955,14 @@ namespace MYSFTP
           errEl.style.display = 'block';
         }
       }).catch(function(err) {
+        if (timer) clearTimeout(timer);
         btn.innerHTML = '🚀 Hubungkan';
         btn.disabled = false;
         showLoader(false);
-        document.getElementById('connect-error').textContent = '❌ Kesalahan: ' + err.message;
+        var msg = (err.name === 'AbortError') 
+          ? 'Koneksi timeout — pastikan Host IP, Port, dan firewall server mengizinkan SSH' 
+          : err.message;
+        document.getElementById('connect-error').textContent = '❌ Kesalahan: ' + msg;
         document.getElementById('connect-error').style.display = 'block';
       });
     }
