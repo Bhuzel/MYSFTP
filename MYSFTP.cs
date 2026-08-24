@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Diagnostics;
 using System.Threading;
@@ -10,20 +11,19 @@ namespace MYSFTP
 {
     static class Program
     {
-        private static HttpListener listener;
+        private static TcpListener listener;
         private static int port = 39281;
         private static bool isRunning = true;
 
         [STAThread]
         static void Main(string[] args)
         {
-            // Cari port bebas jika 39281 terpakai
-            for (int p = 39281; p < 39300; p++)
+            // Cari port bebas menggunakan TcpListener (Zero Admin Permission Needed)
+            for (int p = 39281; p < 39350; p++)
             {
                 try
                 {
-                    listener = new HttpListener();
-                    listener.Prefixes.Add("http://127.0.0.1:" + p + "/");
+                    listener = new TcpListener(IPAddress.Loopback, p);
                     listener.Start();
                     port = p;
                     break;
@@ -36,30 +36,40 @@ namespace MYSFTP
 
             if (listener == null)
             {
-                listener = new HttpListener();
-                listener.Prefixes.Add("http://localhost:39281/");
-                listener.Start();
-                port = 39281;
+                try
+                {
+                    listener = new TcpListener(IPAddress.Any, 0);
+                    listener.Start();
+                    port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.Forms.MessageBox.Show("Gagal memulai engine MYSFTP: " + ex.Message);
+                    return;
+                }
             }
 
-            // Jalankan HTTP Server di Thread Background
+            // Jalankan TCP Listen loop di background thread
             Thread serverThread = new Thread(ListenLoop);
             serverThread.IsBackground = true;
             serverThread.Start();
+
+            // Beri sedikit jeda 100ms agar socket siap
+            Thread.Sleep(100);
 
             string appUrl = "http://127.0.0.1:" + port + "/";
 
             // Buka dalam Native Desktop Window (Edge / Chrome App Mode)
             Process appProcess = LaunchDesktopApp(appUrl);
 
-            // Tunggu jika proses browser app window terbuka
             if (appProcess != null)
             {
                 appProcess.WaitForExit();
+                isRunning = false;
+                try { listener.Stop(); } catch { }
             }
             else
             {
-                // Jika membuka default browser, biarkan server tetap hidup
                 while (isRunning)
                 {
                     Thread.Sleep(1000);
@@ -105,12 +115,12 @@ namespace MYSFTP
 
         private static void ListenLoop()
         {
-            while (isRunning && listener.IsListening)
+            while (isRunning)
             {
                 try
                 {
-                    HttpListenerContext context = listener.GetContext();
-                    ThreadPool.QueueUserWorkItem(ProcessRequest, context);
+                    TcpClient client = listener.AcceptTcpClient();
+                    ThreadPool.QueueUserWorkItem(HandleClient, client);
                 }
                 catch
                 {
@@ -119,110 +129,140 @@ namespace MYSFTP
             }
         }
 
-        private static void ProcessRequest(object state)
+        private static void HandleClient(object state)
         {
-            HttpListenerContext context = (HttpListenerContext)state;
-            HttpListenerRequest request = context.Request;
-            HttpListenerResponse response = context.Response;
-
+            TcpClient client = (TcpClient)state;
             try
             {
-                string path = request.Url.AbsolutePath;
+                using (NetworkStream stream = client.GetStream())
+                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                using (BinaryWriter writer = new BinaryWriter(stream))
+                {
+                    string requestLine = reader.ReadLine();
+                    if (string.IsNullOrEmpty(requestLine)) return;
 
-                response.Headers.Add("Access-Control-Allow-Origin", "*");
-                response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-                response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+                    string[] tokens = requestLine.Split(' ');
+                    if (tokens.Length < 2) return;
 
-                if (request.HttpMethod == "OPTIONS")
-                {
-                    response.StatusCode = 204;
-                    response.Close();
-                    return;
-                }
+                    string method = tokens[0].ToUpper();
+                    string rawUrl = tokens[1];
 
-                if (path == "/" || path == "/index.html")
-                {
-                    byte[] htmlBytes = Encoding.UTF8.GetBytes(HtmlContent);
-                    response.ContentType = "text/html; charset=utf-8";
-                    response.ContentLength64 = htmlBytes.Length;
-                    response.OutputStream.Write(htmlBytes, 0, htmlBytes.Length);
-                }
-                else if (path == "/css/style.css")
-                {
-                    byte[] cssBytes = Encoding.UTF8.GetBytes(CssContent);
-                    response.ContentType = "text/css; charset=utf-8";
-                    response.ContentLength64 = cssBytes.Length;
-                    response.OutputStream.Write(cssBytes, 0, cssBytes.Length);
-                }
-                else if (path == "/js/app.js")
-                {
-                    byte[] jsBytes = Encoding.UTF8.GetBytes(JsContent);
-                    response.ContentType = "application/javascript; charset=utf-8";
-                    response.ContentLength64 = jsBytes.Length;
-                    response.OutputStream.Write(jsBytes, 0, jsBytes.Length);
-                }
-                else if (path == "/api/info")
-                {
-                    string json = "{\"name\":\"MYSFTP Desktop v1.0.0\",\"author\":\"ZellRayy\",\"version\":\"1.0.0\",\"repo\":\"Bhuzel/MYSFTP\"}";
-                    SendJson(response, json);
-                }
-                else if (path == "/api/local/list")
-                {
-                    string dirPath = request.QueryString["path"];
-                    if (string.IsNullOrEmpty(dirPath) || dirPath == ".")
+                    // Baca headers
+                    int contentLength = 0;
+                    string line;
+                    while (!string.IsNullOrEmpty(line = reader.ReadLine()))
                     {
-                        dirPath = AppDomain.CurrentDomain.BaseDirectory;
+                        if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            int.TryParse(line.Substring(15).Trim(), out contentLength);
+                        }
                     }
 
-                    if (!Directory.Exists(dirPath))
+                    // Baca body jika POST
+                    string body = "";
+                    if (contentLength > 0)
                     {
-                        SendJson(response, "{\"success\":false,\"error\":\"Folder tidak ditemukan\"}", 404);
+                        char[] buf = new char[contentLength];
+                        int totalRead = 0;
+                        while (totalRead < contentLength)
+                        {
+                            int r = reader.Read(buf, totalRead, contentLength - totalRead);
+                            if (r <= 0) break;
+                            totalRead += r;
+                        }
+                        body = new string(buf, 0, totalRead);
+                    }
+
+                    string path = rawUrl;
+                    string query = "";
+                    int qIdx = rawUrl.IndexOf('?');
+                    if (qIdx != -1)
+                    {
+                        path = rawUrl.Substring(0, qIdx);
+                        query = rawUrl.Substring(qIdx + 1);
+                    }
+
+                    Dictionary<string, string> queryParams = ParseQuery(query);
+
+                    if (method == "OPTIONS")
+                    {
+                        SendResponse(writer, 204, "text/plain", new byte[0]);
                         return;
                     }
 
-                    List<string> itemsJson = new List<string>();
-
-                    foreach (string d in Directory.GetDirectories(dirPath))
+                    if (path == "/" || path == "/index.html")
                     {
-                        string name = Path.GetFileName(d);
-                        string p = d.Replace('\\', '/');
-                        itemsJson.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(p) + "\",\"isDirectory\":true,\"size\":0}");
+                        byte[] bytes = Encoding.UTF8.GetBytes(HtmlContent);
+                        SendResponse(writer, 200, "text/html; charset=utf-8", bytes);
                     }
-
-                    foreach (string f in Directory.GetFiles(dirPath))
+                    else if (path == "/css/style.css")
                     {
-                        string name = Path.GetFileName(f);
-                        string p = f.Replace('\\', '/');
-                        long sz = new FileInfo(f).Length;
-                        itemsJson.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(p) + "\",\"isDirectory\":false,\"size\":" + sz + "}");
+                        byte[] bytes = Encoding.UTF8.GetBytes(CssContent);
+                        SendResponse(writer, 200, "text/css; charset=utf-8", bytes);
                     }
-
-                    string parent = "";
-                    DirectoryInfo pInfo = Directory.GetParent(dirPath);
-                    if (pInfo != null) parent = pInfo.FullName.Replace('\\', '/');
-
-                    string resJson = "{\"success\":true,\"currentPath\":\"" + EscapeJson(dirPath.Replace('\\', '/')) + "\",\"parentPath\":\"" + EscapeJson(parent) + "\",\"items\":[" + string.Join(",", itemsJson.ToArray()) + "]}";
-                    SendJson(response, resJson);
-                }
-                else if (path == "/api/local/read")
-                {
-                    string filePath = request.QueryString["path"];
-                    if (File.Exists(filePath))
+                    else if (path == "/js/app.js")
                     {
-                        string content = File.ReadAllText(filePath, Encoding.UTF8);
-                        string resJson = "{\"success\":true,\"path\":\"" + EscapeJson(filePath) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
-                        SendJson(response, resJson);
+                        byte[] bytes = Encoding.UTF8.GetBytes(JsContent);
+                        SendResponse(writer, 200, "application/javascript; charset=utf-8", bytes);
                     }
-                    else
+                    else if (path == "/api/info")
                     {
-                        SendJson(response, "{\"success\":false,\"error\":\"Berkas tidak ditemukan\"}", 404);
+                        string json = "{\"name\":\"MYSFTP Desktop v1.0.0\",\"author\":\"ZellRayy\",\"version\":\"1.0.0\",\"repo\":\"Bhuzel/MYSFTP\"}";
+                        SendJsonResponse(writer, 200, json);
                     }
-                }
-                else if (path == "/api/local/write" && request.HttpMethod == "POST")
-                {
-                    using (StreamReader reader = new StreamReader(request.InputStream, Encoding.UTF8))
+                    else if (path == "/api/local/list")
                     {
-                        string body = reader.ReadToEnd();
+                        string dirPath = queryParams.ContainsKey("path") ? queryParams["path"] : "";
+                        if (string.IsNullOrEmpty(dirPath) || dirPath == ".")
+                        {
+                            dirPath = AppDomain.CurrentDomain.BaseDirectory;
+                        }
+
+                        if (!Directory.Exists(dirPath))
+                        {
+                            SendJsonResponse(writer, 404, "{\"success\":false,\"error\":\"Folder tidak ditemukan\"}");
+                            return;
+                        }
+
+                        List<string> items = new List<string>();
+                        foreach (string d in Directory.GetDirectories(dirPath))
+                        {
+                            string name = Path.GetFileName(d);
+                            string p = d.Replace('\\', '/');
+                            items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(p) + "\",\"isDirectory\":true,\"size\":0}");
+                        }
+                        foreach (string f in Directory.GetFiles(dirPath))
+                        {
+                            string name = Path.GetFileName(f);
+                            string p = f.Replace('\\', '/');
+                            long sz = 0;
+                            try { sz = new FileInfo(f).Length; } catch { }
+                            items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(p) + "\",\"isDirectory\":false,\"size\":" + sz + "}");
+                        }
+
+                        string parent = "";
+                        DirectoryInfo pInfo = Directory.GetParent(dirPath);
+                        if (pInfo != null) parent = pInfo.FullName.Replace('\\', '/');
+
+                        string json = "{\"success\":true,\"currentPath\":\"" + EscapeJson(dirPath.Replace('\\', '/')) + "\",\"parentPath\":\"" + EscapeJson(parent) + "\",\"items\":[" + string.Join(",", items.ToArray()) + "]}";
+                        SendJsonResponse(writer, 200, json);
+                    }
+                    else if (path == "/api/local/read")
+                    {
+                        string filePath = queryParams.ContainsKey("path") ? queryParams["path"] : "";
+                        if (File.Exists(filePath))
+                        {
+                            string content = File.ReadAllText(filePath, Encoding.UTF8);
+                            string json = "{\"success\":true,\"path\":\"" + EscapeJson(filePath) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
+                            SendJsonResponse(writer, 200, json);
+                        }
+                        else
+                        {
+                            SendJsonResponse(writer, 404, "{\"success\":false,\"error\":\"File tidak ditemukan\"}");
+                        }
+                    }
+                    else if (path == "/api/local/write" && method == "POST")
+                    {
                         string filePath = ExtractJsonValue(body, "path");
                         string content = ExtractJsonValue(body, "content");
                         if (!string.IsNullOrEmpty(filePath))
@@ -230,44 +270,66 @@ namespace MYSFTP
                             string dir = Path.GetDirectoryName(filePath);
                             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
                             File.WriteAllText(filePath, content, Encoding.UTF8);
-                            SendJson(response, "{\"success\":true,\"message\":\"Berkas berhasil disimpan!\"}");
+                            SendJsonResponse(writer, 200, "{\"success\":true,\"message\":\"Tersimpan!\"}");
                         }
                     }
-                }
-                else if (path == "/api/local/create" && request.HttpMethod == "POST")
-                {
-                    using (StreamReader reader = new StreamReader(request.InputStream, Encoding.UTF8))
+                    else
                     {
-                        string body = reader.ReadToEnd();
-                        string targetPath = ExtractJsonValue(body, "path");
-                        string type = ExtractJsonValue(body, "type");
-                        if (type == "directory") Directory.CreateDirectory(targetPath);
-                        else File.WriteAllText(targetPath, "", Encoding.UTF8);
-                        SendJson(response, "{\"success\":true}");
+                        SendResponse(writer, 404, "text/plain", Encoding.UTF8.GetBytes("404 Not Found"));
                     }
                 }
-                else
-                {
-                    response.StatusCode = 404;
-                }
             }
-            catch (Exception ex)
+            catch
             {
-                SendJson(response, "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}", 500);
             }
             finally
             {
-                response.Close();
+                try { client.Close(); } catch { }
             }
         }
 
-        private static void SendJson(HttpListenerResponse response, string json, int statusCode = 200)
+        private static Dictionary<string, string> ParseQuery(string q)
+        {
+            Dictionary<string, string> dict = new Dictionary<string, string>();
+            if (string.IsNullOrEmpty(q)) return dict;
+            string[] pairs = q.Split('&');
+            foreach (string p in pairs)
+            {
+                string[] kv = p.Split('=');
+                if (kv.Length == 2)
+                {
+                    dict[Uri.UnescapeDataString(kv[0])] = Uri.UnescapeDataString(kv[1]);
+                }
+            }
+            return dict;
+        }
+
+        private static void SendJsonResponse(BinaryWriter writer, int statusCode, string json)
         {
             byte[] bytes = Encoding.UTF8.GetBytes(json);
-            response.ContentType = "application/json; charset=utf-8";
-            response.StatusCode = statusCode;
-            response.ContentLength64 = bytes.Length;
-            response.OutputStream.Write(bytes, 0, bytes.Length);
+            SendResponse(writer, statusCode, "application/json; charset=utf-8", bytes);
+        }
+
+        private static void SendResponse(BinaryWriter writer, int statusCode, string contentType, byte[] body)
+        {
+            string statusText = statusCode == 200 ? "OK" : statusCode == 204 ? "No Content" : statusCode == 404 ? "Not Found" : "Error";
+            StringBuilder sb = new StringBuilder();
+            sb.Append("HTTP/1.1 " + statusCode + " " + statusText + "\r\n");
+            sb.Append("Content-Type: " + contentType + "\r\n");
+            sb.Append("Content-Length: " + body.Length + "\r\n");
+            sb.Append("Access-Control-Allow-Origin: *\r\n");
+            sb.Append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+            sb.Append("Access-Control-Allow-Headers: Content-Type\r\n");
+            sb.Append("Connection: close\r\n");
+            sb.Append("\r\n");
+
+            byte[] headerBytes = Encoding.ASCII.GetBytes(sb.ToString());
+            writer.Write(headerBytes);
+            if (body.Length > 0)
+            {
+                writer.Write(body);
+            }
+            writer.Flush();
         }
 
         private static string EscapeJson(string s)

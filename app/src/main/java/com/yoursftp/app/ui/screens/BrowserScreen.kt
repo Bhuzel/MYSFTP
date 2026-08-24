@@ -212,7 +212,8 @@ fun BrowserScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var dialog by remember { mutableStateOf<BrowserDialog?>(null) }
-    var isSplitMode by remember { mutableStateOf(true) } // Default to split pane (2 panels) as requested
+    var isSplitMode by remember { mutableStateOf(false) } // Default to single pane (full width) for spacious remote browsing
+    var moreMenuOpen by remember { mutableStateOf(false) }
 
     // Permission state
     var hasStoragePermission by remember {
@@ -282,6 +283,7 @@ fun BrowserScreen(
     LaunchedEffect(connectionId) {
         vm.connect(1, -1L)
         vm.connect(2, connectionId)
+        vm.setActiveTab(2) // Focus directly on the remote server tab!
     }
 
     val hostKeyChangedEvent = state.hostKeyChangedEvent
@@ -321,6 +323,7 @@ fun BrowserScreen(
     }
 
     val activeTab = state.activeTab
+    val activeTabState = if (activeTab == 1) state.tab1 else state.tab2
 
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -329,17 +332,24 @@ fun BrowserScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("MYSFTP Dual Manager", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                title = {
+                    Text(
+                        text = if (activeTabState.connectionName.isNotBlank()) activeTabState.connectionName else "MYSFTP",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { vm.disconnect(); onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali")
                     }
                 },
                 actions = {
-                    val activeTabState = if (activeTab == 1) state.tab1 else state.tab2
                     if (activeTabState.connectionId > 0 && isSftp(activeTabState.connectionId, connections)) {
                         IconButton(onClick = { onOpenTerminal(activeTabState.connectionId) }) {
-                            Icon(Icons.Default.Terminal, contentDescription = "SSH Terminal")
+                            Icon(Icons.Default.Terminal, contentDescription = "SSH Terminal", tint = MaterialTheme.colorScheme.primary)
                         }
                     }
                     if (!isLandscape) {
@@ -347,18 +357,38 @@ fun BrowserScreen(
                             Icon(
                                 imageVector = if (isSplitMode) Icons.Default.Fullscreen else Icons.Default.Splitscreen,
                                 contentDescription = if (isSplitMode) "Mode Layar Penuh" else "Mode Layar Belah",
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = if (isSplitMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                    IconButton(onClick = { dialog = BrowserDialog.NewFolder(activeTab) }) {
-                        Icon(Icons.Default.CreateNewFolder, contentDescription = "Folder baru")
-                    }
-                    IconButton(onClick = { dialog = BrowserDialog.NewFile(activeTab) }) {
-                        Icon(Icons.Default.NoteAdd, contentDescription = "File baru")
-                    }
                     IconButton(onClick = { vm.refresh(activeTab) }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Muat ulang")
+                    }
+                    Box {
+                        IconButton(onClick = { moreMenuOpen = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu Aksi")
+                        }
+                        DropdownMenu(
+                            expanded = moreMenuOpen,
+                            onDismissRequest = { moreMenuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Folder Baru", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                onClick = {
+                                    moreMenuOpen = false
+                                    dialog = BrowserDialog.NewFolder(activeTab)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("File Baru", fontSize = 13.sp) },
+                                leadingIcon = { Icon(Icons.Default.NoteAdd, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                onClick = {
+                                    moreMenuOpen = false
+                                    dialog = BrowserDialog.NewFile(activeTab)
+                                }
+                            )
+                        }
                     }
                 }
             )

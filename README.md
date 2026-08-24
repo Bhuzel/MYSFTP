@@ -1,21 +1,23 @@
-# MYSFTP 🌐⚡ (v1.0.0 — Luxury Dark Edition)
+<div align="center">
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20(.exe)%20%7C%20Android%20(.apk)-3DDC84?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Bhuzel/MYSFTP/releases)
-[![Language](https://img.shields.io/badge/Language-C%23%20%7C%20Kotlin-7F52FF?style=for-the-badge&logo=csharp&logoColor=white)](https://github.com/Bhuzel/MYSFTP)
-[![Version](https://img.shields.io/badge/Version-1.0.0-CDBD94?style=for-the-badge&logo=appveyor&logoColor=17150F)](https://github.com/Bhuzel/MYSFTP)
-[![CI/CD Status](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](https://github.com/Bhuzel/MYSFTP/actions)
-[![Author](https://img.shields.io/badge/Author-ZellRayy-7FBF8F?style=for-the-badge)](https://t.me/BhuzelRayhan)
+# ⚡ MYSFTP (v1.0.0 — Luxury Dark Edition)
 
-**MYSFTP v1.0.0** adalah aplikasi hybrid **SFTP + Termius** multi-platform yang dirancang khusus dengan tema visual **Luxury Dark Gold** (`#0a0a0b` & `#cdbd94`).
-* 💻 **Untuk Laptop / PC:** Cukup klik ganda **`MYSFTP.exe`** (aplikasi desktop standalone portabel tanpa perlu emulator / Android Studio).
-* 📱 **Untuk HP Android:** Pasang **`MYSFTP.apk`** untuk pengalaman mobile penuh dengan OTA Update otomatis.
-
-> 📖 **Panduan Lengkap Penggunaan & Rilis**:  
-> Silakan baca panduan lengkap di [**`Penggunaan.md`**](file:///Penggunaan.md).
+**Next-Generation Multi-Platform SFTP Client & SSH Terminal Hybrid**  
+*Crafted with Luxury Dark Gold Aesthetics by **ZellRayy***
 
 ---
 
-## 🎨 Palet Tema Visual (Luxury Dark Gold)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20PC%20%7C%20Android-121213?style=for-the-badge&logo=android&logoColor=CDBD94)](https://github.com/Bhuzel/MYSFTP/releases)
+[![Build CI/CD](https://img.shields.io/badge/GitHub-Actions%20CI%2FCD-19191B?style=for-the-badge&logo=githubactions&logoColor=7FBF8F)](https://github.com/Bhuzel/MYSFTP/actions)
+[![Language](https://img.shields.io/badge/Kotlin%20%7C%20C%23-222224?style=for-the-badge&logo=kotlin&logoColor=CDBD94)](https://github.com/Bhuzel/MYSFTP)
+[![License](https://img.shields.io/badge/License-MIT-101011?style=for-the-badge&logoColor=D9D4C7)](https://github.com/Bhuzel/MYSFTP)
+[![Author](https://img.shields.io/badge/Author-ZellRayy-17150F?style=for-the-badge&logoColor=DED0AA)](https://t.me/BhuzelRayhan)
+
+</div>
+
+---
+
+## 🎨 Theme Palette (Luxury Dark Gold)
 
 ```css
 :root,
@@ -43,35 +45,50 @@
 
 ---
 
-## 🚀 Cara Menjalankan MYSFTP
+## 🌟 Key Capabilities
 
-### 💻 1. Di Laptop / PC (Windows Standalone)
-1. Unduh atau buka file **[`MYSFTP.exe`](file:///MYSFTP.exe)** di folder proyek.
-2. Klik ganda `MYSFTP.exe` untuk membuka jendela aplikasi desktop mandiri.
-3. Langsung gunakan Dual-Pane SFTP Explorer, In-App Code Editor, Termius SSH Terminal, dan Database Viewer!
+### 💻 1. Windows PC Standalone (`MYSFTP.exe`)
+* **Zero-Setup Portability**: Single `.exe` binary (~134 KB). Double click and run directly without needing emulators or external frameworks.
+* **App-Window Interface**: Opens in a dedicated frameless desktop window with pure luxury dark gold theme.
+* **Hybrid Termius + SFTP**: Dual-pane file transfers, SSH terminal with quick Linux command chips, in-app code editor, and local/remote explorer.
 
-### 📱 2. Di HP Android
-* Unduh **`MYSFTP.apk`** dari menu [**Releases** di GitHub](https://github.com/Bhuzel/MYSFTP/releases) dan pasang di perangkat Android Anda.
-
----
-
-## ✨ Fitur-Fitur Unggulan MYSFTP
-
-1. **🔀 Dual-Pane File Manager**: Sinkronisasi dan pemindahan berkas super cepat antara lokal dan remote server.
-2. **📝 In-App Code Editor**: Syntax highlighting, penomoran baris, status bar, dan penyimpanan cepat (`Ctrl + S`).
-3. **💻 SSH Terminal Emulator (Termius Hybrid)**: Konsol interaktif VT100 / xterm dengan tombol pintasan perintah Linux (`ls -la`, `df -h`, `free -m`, `top`, `docker ps`, `pm2 status`).
-4. **🗄️ Multi-Format Database Viewer**: Membaca file SQLite (`.db`), JSON, CSV, dan SQL Dump.
-5. **🌐 Multi-Protokol**: Mendukung SFTP (SSH), FTP, FTPS, AWS S3 / MinIO, dan Local Storage.
+### 📱 2. Android Native Client (`MYSFTP.apk`)
+* **Spacious Single-Pane by Default**: Connects straight to your remote SFTP directory in roomy full-width display without cramped split screens.
+* **Optional Dual-Pane Sync**: Switch to split-screen mode on demand for side-by-side local & remote file moving.
+* **Termius-Inspired Terminal**: Compact monospace font (9.5sp), automatic output bottom-scrolling, status indicator, and quick-command dock (`ls -la`, `df -h`, `free -m`, `top`, `docker ps`, `pm2 status`).
+* **Built-in Code & Text Editor**: Syntax highlighting for 15+ languages, line numbers, and VS Code-style status bar.
+* **OTA Updates**: Automatically fetches and notifies new releases directly from `Bhuzel/MYSFTP`.
 
 ---
 
-## 💬 Hubungi & Kontak Pengembang
+## 🚀 Quick Start
 
-Jika Anda membutuhkan bantuan teknis atau konsultasi:
-* **Pengembang:** ZellRayy
-* **WhatsApp:** [082352052566](https://wa.me/6282352052566)
-* **Telegram:** [@BhuzelRayhan](https://t.me/BhuzelRayhan)
-* **Repositori GitHub:** [https://github.com/Bhuzel/MYSFTP](https://github.com/Bhuzel/MYSFTP)
+### 🖥️ Windows PC / Laptop
+1. Download **`MYSFTP.exe`** from [**Releases**](https://github.com/Bhuzel/MYSFTP/releases).
+2. Double-click **`MYSFTP.exe`** to launch instantly.
+
+### 📱 Android Mobile
+1. Download **`MYSFTP.apk`** from [**Releases**](https://github.com/Bhuzel/MYSFTP/releases).
+2. Install the APK on your Android device.
 
 ---
-*MYSFTP v1.0.0 — Dibuat dan dioptimalkan secara khusus untuk performa tinggi & kenyamanan pengembang.*
+
+## 🛠️ Automated CI/CD & Build System
+
+This repository is powered by automated **GitHub Actions CI/CD** (`.github/workflows/android.yml`):
+* Every commit on `main` or new tag (`v*`) automatically compiles the Android APK and bundles the Windows executable.
+* Releases are published automatically to [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases).
+
+---
+
+## 💬 Developer & Support
+
+* **Developer**: ZellRayy
+* **Telegram**: [@BhuzelRayhan](https://t.me/BhuzelRayhan)
+* **WhatsApp**: [+62 823-5205-2566](https://wa.me/6282352052566)
+* **Repository**: [https://github.com/Bhuzel/MYSFTP](https://github.com/Bhuzel/MYSFTP)
+
+---
+<div align="center">
+  <sub>MYSFTP v1.0.0 — Engineered for speed, aesthetics, and developer productivity.</sub>
+</div>

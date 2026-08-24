@@ -101,9 +101,9 @@ fun TerminalScreen(
     val focusRequester = remember { FocusRequester() }
     val listState = rememberLazyListState()
 
-    var fontSizeSp by remember { mutableStateOf(12f) }
+    var fontSizeSp by remember { mutableStateOf(9.5f) } // Default to sleek, zoomed-out Termius monospace
     val transformableState = rememberTransformableState { zoomChange, _, _ ->
-        fontSizeSp = (fontSizeSp * zoomChange).coerceIn(8f, 24f)
+        fontSizeSp = (fontSizeSp * zoomChange).coerceIn(6f, 20f)
     }
 
     var input by remember { mutableStateOf(TextFieldValue("")) }
@@ -141,17 +141,11 @@ fun TerminalScreen(
     val snapshot = state.snapshot
     val lineCount = snapshot?.lines?.size ?: 0
 
-    // Auto-scroll ke bawah secara cerdas jika posisi scroll di bawah
-    val atBottom by remember {
-        derivedStateOf {
-            val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            last >= info.totalItemsCount - 1
+    // Auto-scroll ke bawah otomatis setiap ada output baru dari server
+    LaunchedEffect(snapshot?.revision, lineCount) {
+        if (lineCount > 0) {
+            listState.scrollToItem(lineCount - 1)
         }
-    }
-
-    LaunchedEffect(snapshot?.revision) {
-        if (lineCount > 0 && atBottom) listState.scrollToItem(lineCount - 1)
     }
 
     Scaffold(
@@ -272,8 +266,12 @@ fun TerminalScreen(
                     value = input,
                     onValueChange = { newVal ->
                         handleInput(input.text, newVal.text, vm)
-                        input = if (newVal.text.contains('\n') || newVal.text.length > 800)
-                            TextFieldValue("") else newVal
+                        input = if (newVal.text.contains('\n') || newVal.text.length > 800) {
+                            scope.launch {
+                                if (lineCount > 0) listState.scrollToItem(lineCount - 1)
+                            }
+                            TextFieldValue("")
+                        } else newVal
                     },
                     textStyle = TextStyle(color = Color.Transparent, fontSize = 1.sp),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Transparent),
