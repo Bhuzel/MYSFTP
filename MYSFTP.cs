@@ -1,685 +1,410 @@
 using System;
 using System.IO;
-using System.Drawing;
-using System.Windows.Forms;
-using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
+using System.Threading;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace MYSFTP
 {
-    public class Theme
+    class Program
     {
-        public static Color Bg = Color.FromArgb(10, 10, 11);
-        public static Color SidebarBg = Color.FromArgb(18, 18, 19);
-        public static Color CardBg = Color.FromArgb(25, 25, 27);
-        public static Color InputBg = Color.FromArgb(15, 15, 16);
-        public static Color Border = Color.FromArgb(43, 43, 46);
-        public static Color Gold = Color.FromArgb(205, 189, 148);
-        public static Color GoldLight = Color.FromArgb(222, 208, 170);
-        public static Color Text = Color.FromArgb(217, 212, 199);
-        public static Color TextMuted = Color.FromArgb(139, 135, 124);
-        public static Color Green = Color.FromArgb(127, 191, 143);
-        public static Color Red = Color.FromArgb(224, 108, 117);
+        private static HttpListener listener;
+        private static int port;
+        private static string dataDir;
+        private static string profilesFile;
+        private static bool isRunning = true;
+        private static Process browserProcess;
 
-        public static Font FontRegular = new Font("Segoe UI", 9.5f, FontStyle.Regular);
-        public static Font FontBold = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        public static Font FontTitle = new Font("Segoe UI", 12f, FontStyle.Bold);
-        public static Font FontMono = new Font("Consolas", 10f, FontStyle.Regular);
-    }
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
-    public class ConnectionProfile
-    {
-        public string Id { get; set; }
-        public string Name { get; set; }
-        public string Protocol { get; set; }
-        public string Host { get; set; }
-        public int Port { get; set; }
-        public string Username { get; set; }
-        public string Password { get; set; }
-
-        public ConnectionProfile()
+        [STAThread]
+        static void Main(string[] args)
         {
-            Id = Guid.NewGuid().ToString();
-            Port = 22;
-            Protocol = "SFTP";
-        }
-    }
+            dataDir = AppDomain.CurrentDomain.BaseDirectory;
+            profilesFile = Path.Combine(dataDir, "connections.json");
 
-    public class MainForm : Form
-    {
-        private Panel pnlSidebar;
-        private Panel pnlHeader;
-        private Panel pnlMain;
-        private Label lblBreadcrumb;
-        private Button btnTopAction;
+            // Find a free TCP port
+            TcpListener tcp = new TcpListener(IPAddress.Loopback, 0);
+            tcp.Start();
+            port = ((IPEndPoint)tcp.LocalEndpoint).Port;
+            tcp.Stop();
 
-        private Panel viewConnections;
-        private Panel viewBrowser;
-        private Panel viewEditor;
-        private Panel viewTerminal;
+            listener = new HttpListener();
+            listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
+            listener.Start();
 
-        private Button btnNavConnections;
-        private Button btnNavBrowser;
-        private Button btnNavEditor;
-        private Button btnNavTerminal;
+            Thread serverThread = new Thread(StartServer);
+            serverThread.IsBackground = true;
+            serverThread.Start();
 
-        // Connections UI
-        private FlowLayoutPanel flowConnections;
-        private List<ConnectionProfile> profiles = new List<ConnectionProfile>();
-        private string profilesFilePath;
+            // Launch Standalone App Window (Edge / Chrome App Mode)
+            LaunchAppWindow("http://127.0.0.1:" + port + "/");
 
-        // Browser UI
-        private ListView lvFiles;
-        private string currentDirectory;
-
-        // Editor UI
-        private RichTextBox rtbCode;
-        private string activeEditingFile;
-        private Label lblEditorStatus;
-
-        // Terminal UI
-        private RichTextBox rtbTerminal;
-        private TextBox txtTermInput;
-
-        public MainForm()
-        {
-            this.Text = "MYSFTP v1.4.0 — Desktop Client (by ZellRayy)";
-            this.Size = new Size(1280, 820);
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Theme.Bg;
-            this.ForeColor = Theme.Text;
-            this.Font = Theme.FontRegular;
-
-            try
+            // Keep main alive until browser exits
+            if (browserProcess != null)
             {
-                if (File.Exists("app.ico"))
-                {
-                    this.Icon = new Icon("app.ico");
-                }
-                else if (File.Exists("Icon.jpg"))
-                {
-                    using (Bitmap bmp = new Bitmap("Icon.jpg"))
-                    {
-                        IntPtr hIcon = bmp.GetHicon();
-                        this.Icon = Icon.FromHandle(hIcon);
-                    }
-                }
-            }
-            catch { }
-
-            profilesFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "connections.json");
-            currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
-
-            InitializeLayout();
-            LoadProfiles();
-            SwitchView("connections");
-        }
-
-        private void InitializeLayout()
-        {
-            // Sidebar
-            pnlSidebar = new Panel
-            {
-                Dock = DockStyle.Left,
-                Width = 240,
-                BackColor = Theme.SidebarBg
-            };
-
-            // Brand Section
-            Panel pnlBrand = new Panel { Dock = DockStyle.Top, Height = 65, BackColor = Theme.SidebarBg };
-            Label lblBrand = new Label
-            {
-                Text = "⚡ MYSFTP v1.4.0",
-                Font = new Font("Segoe UI", 12.5f, FontStyle.Bold),
-                ForeColor = Theme.GoldLight,
-                Location = new Point(16, 14),
-                AutoSize = true
-            };
-            Label lblAuthor = new Label
-            {
-                Text = "Luxury Client by ZellRayy",
-                Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                ForeColor = Theme.TextMuted,
-                Location = new Point(18, 38),
-                AutoSize = true
-            };
-            pnlBrand.Controls.Add(lblBrand);
-            pnlBrand.Controls.Add(lblAuthor);
-
-            // Nav Group
-            Label lblNavLabel = new Label
-            {
-                Text = "NAVIGASI UTAMA",
-                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                ForeColor = Theme.TextMuted,
-                Location = new Point(16, 80),
-                AutoSize = true
-            };
-
-            btnNavConnections = CreateNavButton("●  Koneksi Server", 105, (s, e) => SwitchView("connections"));
-            btnNavBrowser = CreateNavButton("📁  File Explorer", 150, (s, e) => SwitchView("browser"));
-            btnNavEditor = CreateNavButton("📝  Pro Code Editor", 195, (s, e) => SwitchView("editor"));
-
-            Label lblToolLabel = new Label
-            {
-                Text = "DEVELOPER TOOLS",
-                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
-                ForeColor = Theme.TextMuted,
-                Location = new Point(16, 250),
-                AutoSize = true
-            };
-
-            btnNavTerminal = CreateNavButton("💻  SSH Terminal", 275, (s, e) => SwitchView("terminal"));
-
-            // Footer info
-            Panel pnlFooter = new Panel { Dock = DockStyle.Bottom, Height = 50, BackColor = Theme.SidebarBg };
-            Label lblStatus = new Label
-            {
-                Text = "● PC Native Engine",
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                ForeColor = Theme.Green,
-                Location = new Point(16, 15),
-                AutoSize = true
-            };
-            Button btnInfo = new Button
-            {
-                Text = "i",
-                Size = new Size(28, 28),
-                Location = new Point(195, 10),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.CardBg,
-                ForeColor = Theme.Gold,
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnInfo.FlatAppearance.BorderColor = Theme.Border;
-            btnInfo.Click += (s, e) =>
-            {
-                MessageBox.Show("⚡ MYSFTP v1.4.0 (Desktop Native Edition)\n\n" +
-                                "Pengembang: ZellRayy\n" +
-                                "WhatsApp: 082352052566\n" +
-                                "Telegram: @BhuzelRayhan\n" +
-                                "GitHub: https://github.com/Bhuzel/MYSFTP\n\n" +
-                                "Aplikasi SFTP & SSH Terminal Multi-Platform", "Tentang MYSFTP", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            };
-            pnlFooter.Controls.Add(lblStatus);
-            pnlFooter.Controls.Add(btnInfo);
-
-            pnlSidebar.Controls.Add(pnlBrand);
-            pnlSidebar.Controls.Add(lblNavLabel);
-            pnlSidebar.Controls.Add(btnNavConnections);
-            pnlSidebar.Controls.Add(btnNavBrowser);
-            pnlSidebar.Controls.Add(btnNavEditor);
-            pnlSidebar.Controls.Add(lblToolLabel);
-            pnlSidebar.Controls.Add(btnNavTerminal);
-            pnlSidebar.Controls.Add(pnlFooter);
-
-            // Header
-            pnlHeader = new Panel
-            {
-                Dock = DockStyle.Top,
-                Height = 56,
-                BackColor = Theme.CardBg
-            };
-            lblBreadcrumb = new Label
-            {
-                Text = "📁 / (root)",
-                Font = Theme.FontBold,
-                ForeColor = Theme.GoldLight,
-                Location = new Point(18, 17),
-                AutoSize = true
-            };
-            btnTopAction = new Button
-            {
-                Text = "+ Koneksi Baru",
-                Size = new Size(130, 34),
-                Location = new Point(pnlHeader.Width - 150, 11),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Gold,
-                ForeColor = Color.FromArgb(23, 21, 15),
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnTopAction.FlatAppearance.BorderSize = 0;
-            btnTopAction.Click += (s, e) => OpenAddConnectionModal();
-            pnlHeader.Controls.Add(lblBreadcrumb);
-            pnlHeader.Controls.Add(btnTopAction);
-
-            // Main Content Area
-            pnlMain = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
-
-            BuildConnectionsView();
-            BuildBrowserView();
-            BuildEditorView();
-            BuildTerminalView();
-
-            pnlMain.Controls.Add(viewConnections);
-            pnlMain.Controls.Add(viewBrowser);
-            pnlMain.Controls.Add(viewEditor);
-            pnlMain.Controls.Add(viewTerminal);
-
-            this.Controls.Add(pnlMain);
-            this.Controls.Add(pnlHeader);
-            this.Controls.Add(pnlSidebar);
-        }
-
-        private Button CreateNavButton(string text, int top, EventHandler onClick)
-        {
-            Button btn = new Button
-            {
-                Text = text,
-                Location = new Point(12, top),
-                Size = new Size(216, 38),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.SidebarBg,
-                ForeColor = Theme.TextMuted,
-                Font = Theme.FontRegular,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(8, 0, 0, 0),
-                Cursor = Cursors.Hand
-            };
-            btn.FlatAppearance.BorderSize = 0;
-            btn.Click += onClick;
-            return btn;
-        }
-
-        #region Views Construction
-        private void BuildConnectionsView()
-        {
-            viewConnections = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg, Padding = new Padding(20) };
-            
-            Label lblTitle = new Label
-            {
-                Text = "Profil Koneksi Server",
-                Font = new Font("Segoe UI", 14f, FontStyle.Bold),
-                ForeColor = Theme.Text,
-                Location = new Point(20, 20),
-                AutoSize = true
-            };
-            Label lblDesc = new Label
-            {
-                Text = "Kelola server SFTP, FTP, atau File Lokal PC Anda dengan aman dan terorganisir.",
-                Font = Theme.FontRegular,
-                ForeColor = Theme.TextMuted,
-                Location = new Point(22, 48),
-                AutoSize = true
-            };
-
-            Button btnAdd = new Button
-            {
-                Text = "+ Tambah Profil",
-                Size = new Size(130, 34),
-                Location = new Point(viewConnections.Width - 160, 20),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Gold,
-                ForeColor = Color.FromArgb(23, 21, 15),
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnAdd.FlatAppearance.BorderSize = 0;
-            btnAdd.Click += (s, e) => OpenAddConnectionModal();
-
-            flowConnections = new FlowLayoutPanel
-            {
-                Location = new Point(20, 85),
-                Size = new Size(viewConnections.Width - 40, viewConnections.Height - 100),
-                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-                AutoScroll = true,
-                BackColor = Theme.Bg
-            };
-
-            viewConnections.Controls.Add(lblTitle);
-            viewConnections.Controls.Add(lblDesc);
-            viewConnections.Controls.Add(btnAdd);
-            viewConnections.Controls.Add(flowConnections);
-        }
-
-        private void BuildBrowserView()
-        {
-            viewBrowser = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Bg };
-
-            Panel pnlToolbar = new Panel { Dock = DockStyle.Top, Height = 44, BackColor = Theme.SidebarBg, Padding = new Padding(8, 6, 8, 6) };
-            Button btnUp = CreateToolbarButton("▲  Folder Induk", 8, (s, e) => NavigateUpDirectory());
-            Button btnRefresh = CreateToolbarButton("🔄  Muat Ulang", 130, (s, e) => LoadDirectory(currentDirectory));
-            Button btnNewFile = CreateToolbarButton("+ File Baru", 250, (s, e) => CreateNewFilePrompt());
-            Button btnNewFolder = CreateToolbarButton("+ Folder Baru", 360, (s, e) => CreateNewFolderPrompt());
-
-            pnlToolbar.Controls.Add(btnUp);
-            pnlToolbar.Controls.Add(btnRefresh);
-            pnlToolbar.Controls.Add(btnNewFile);
-            pnlToolbar.Controls.Add(btnNewFolder);
-
-            lvFiles = new ListView
-            {
-                Dock = DockStyle.Fill,
-                View = View.Details,
-                FullRowSelect = true,
-                GridLines = false,
-                BackColor = Theme.Bg,
-                ForeColor = Theme.Text,
-                Font = Theme.FontRegular,
-                BorderStyle = BorderStyle.None
-            };
-            lvFiles.Columns.Add("Nama", 400);
-            lvFiles.Columns.Add("Ukuran", 120);
-            lvFiles.Columns.Add("Tipe", 120);
-            lvFiles.Columns.Add("Dimodifikasi", 200);
-
-            lvFiles.DoubleClick += (s, e) =>
-            {
-                if (lvFiles.SelectedItems.Count == 0) return;
-                var item = lvFiles.SelectedItems[0];
-                string fullPath = item.Tag as string;
-                if (string.IsNullOrEmpty(fullPath)) return;
-
-                if (Directory.Exists(fullPath))
-                {
-                    LoadDirectory(fullPath);
-                }
-                else if (File.Exists(fullPath))
-                {
-                    OpenFileInEditor(fullPath);
-                }
-            };
-
-            ContextMenuStrip ctx = new ContextMenuStrip();
-            ctx.Items.Add("Buka", null, (s, e) => {
-                if (lvFiles.SelectedItems.Count > 0) {
-                    string p = lvFiles.SelectedItems[0].Tag as string;
-                    if (Directory.Exists(p)) LoadDirectory(p);
-                    else if (File.Exists(p)) OpenFileInEditor(p);
-                }
-            });
-            ctx.Items.Add("Hapus", null, (s, e) => {
-                if (lvFiles.SelectedItems.Count > 0) {
-                    string p = lvFiles.SelectedItems[0].Tag as string;
-                    if (MessageBox.Show("Hapus item ini: " + Path.GetFileName(p) + "?", "Konfirmasi Hapus", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes) {
-                        try {
-                            if (Directory.Exists(p)) Directory.Delete(p, true);
-                            else if (File.Exists(p)) File.Delete(p);
-                            LoadDirectory(currentDirectory);
-                        } catch (Exception ex) { MessageBox.Show("Gagal menghapus: " + ex.Message); }
-                    }
-                }
-            });
-            lvFiles.ContextMenuStrip = ctx;
-
-            viewBrowser.Controls.Add(lvFiles);
-            viewBrowser.Controls.Add(pnlToolbar);
-        }
-
-        private void BuildEditorView()
-        {
-            viewEditor = new Panel { Dock = DockStyle.Fill, BackColor = Color.FromArgb(16, 16, 17) };
-
-            Panel pnlEdToolbar = new Panel { Dock = DockStyle.Top, Height = 42, BackColor = Theme.SidebarBg, Padding = new Padding(8) };
-            Button btnSave = new Button
-            {
-                Text = "💾  Simpan Berkas (Ctrl+S)",
-                Size = new Size(180, 28),
-                Location = new Point(8, 7),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Gold,
-                ForeColor = Color.FromArgb(23, 21, 15),
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnSave.FlatAppearance.BorderSize = 0;
-            btnSave.Click += (s, e) => SaveCurrentEditorFile();
-
-            lblEditorStatus = new Label
-            {
-                Text = "Tiada berkas terbuka",
-                Font = Theme.FontMono,
-                ForeColor = Theme.GoldLight,
-                Location = new Point(200, 12),
-                AutoSize = true
-            };
-            pnlEdToolbar.Controls.Add(btnSave);
-            pnlEdToolbar.Controls.Add(lblEditorStatus);
-
-            rtbCode = new RichTextBox
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(14, 14, 15),
-                ForeColor = Theme.Text,
-                Font = Theme.FontMono,
-                BorderStyle = BorderStyle.None,
-                AcceptsTab = true,
-                WordWrap = false
-            };
-            rtbCode.KeyDown += (s, e) =>
-            {
-                if (e.Control && e.KeyCode == Keys.S)
-                {
-                    e.SuppressKeyPress = true;
-                    SaveCurrentEditorFile();
-                }
-            };
-
-            viewEditor.Controls.Add(rtbCode);
-            viewEditor.Controls.Add(pnlEdToolbar);
-        }
-
-        private void BuildTerminalView()
-        {
-            viewTerminal = new Panel { Dock = DockStyle.Fill, BackColor = Color.Black };
-
-            Panel pnlTermToolbar = new Panel { Dock = DockStyle.Top, Height = 40, BackColor = Theme.SidebarBg, Padding = new Padding(8, 4, 8, 4) };
-            Label lblTermTitle = new Label { Text = "💻 SSH Terminal Console", Font = Theme.FontBold, ForeColor = Theme.GoldLight, Location = new Point(8, 10), AutoSize = true };
-            
-            Button btnSnippet1 = CreateSnippetButton("ls -la", 200, (s, e) => RunTerminalCommand("ls -la"));
-            Button btnSnippet2 = CreateSnippetButton("df -h", 270, (s, e) => RunTerminalCommand("df -h"));
-            Button btnSnippet3 = CreateSnippetButton("free -m", 340, (s, e) => RunTerminalCommand("free -m"));
-            Button btnSnippet4 = CreateSnippetButton("pm2 status", 420, (s, e) => RunTerminalCommand("pm2 status"));
-            Button btnSnippet5 = CreateSnippetButton("uptime", 510, (s, e) => RunTerminalCommand("uptime"));
-            Button btnClear = CreateSnippetButton("🧹 Clear", 580, (s, e) => { rtbTerminal.Clear(); PrintTermPrompt(); });
-
-            pnlTermToolbar.Controls.Add(lblTermTitle);
-            pnlTermToolbar.Controls.Add(btnSnippet1);
-            pnlTermToolbar.Controls.Add(btnSnippet2);
-            pnlTermToolbar.Controls.Add(btnSnippet3);
-            pnlTermToolbar.Controls.Add(btnSnippet4);
-            pnlTermToolbar.Controls.Add(btnSnippet5);
-            pnlTermToolbar.Controls.Add(btnClear);
-
-            Panel pnlTermInput = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Theme.SidebarBg, Padding = new Padding(8) };
-            Label lblPrompt = new Label { Text = "mysftp@remote:~$", Font = Theme.FontMono, ForeColor = Theme.Green, Location = new Point(8, 11), AutoSize = true };
-            txtTermInput = new TextBox
-            {
-                Location = new Point(160, 8),
-                Size = new Size(pnlTermInput.Width - 250, 26),
-                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
-                BackColor = Theme.InputBg,
-                ForeColor = Theme.GoldLight,
-                Font = Theme.FontMono,
-                BorderStyle = BorderStyle.FixedSingle
-            };
-            Button btnSend = new Button
-            {
-                Text = "Kirim",
-                Size = new Size(70, 26),
-                Location = new Point(pnlTermInput.Width - 80, 8),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Gold,
-                ForeColor = Color.FromArgb(23, 21, 15),
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnSend.FlatAppearance.BorderSize = 0;
-            btnSend.Click += (s, e) => ExecuteTerminalInput();
-            txtTermInput.KeyDown += (s, e) =>
-            {
-                if (e.KeyCode == Keys.Enter)
-                {
-                    e.SuppressKeyPress = true;
-                    ExecuteTerminalInput();
-                }
-            };
-
-            pnlTermInput.Controls.Add(lblPrompt);
-            pnlTermInput.Controls.Add(txtTermInput);
-            pnlTermInput.Controls.Add(btnSend);
-
-            rtbTerminal = new RichTextBox
-            {
-                Dock = DockStyle.Fill,
-                BackColor = Color.FromArgb(5, 5, 5),
-                ForeColor = Theme.Text,
-                Font = Theme.FontMono,
-                BorderStyle = BorderStyle.None,
-                ReadOnly = true
-            };
-
-            viewTerminal.Controls.Add(rtbTerminal);
-            viewTerminal.Controls.Add(pnlTermInput);
-            viewTerminal.Controls.Add(pnlTermToolbar);
-
-            PrintTermWelcome();
-        }
-
-        private Button CreateToolbarButton(string text, int left, EventHandler onClick)
-        {
-            Button btn = new Button
-            {
-                Text = text,
-                Location = new Point(left, 6),
-                Size = new Size(110, 30),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.CardBg,
-                ForeColor = Theme.Text,
-                Font = Theme.FontRegular,
-                Cursor = Cursors.Hand
-            };
-            btn.FlatAppearance.BorderColor = Theme.Border;
-            btn.Click += onClick;
-            return btn;
-        }
-
-        private Button CreateSnippetButton(string text, int left, EventHandler onClick)
-        {
-            Button btn = new Button
-            {
-                Text = text,
-                Location = new Point(left, 6),
-                Size = new Size(text.Length * 9 + 18, 26),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.CardBg,
-                ForeColor = Theme.GoldLight,
-                Font = new Font("Consolas", 8.5f, FontStyle.Regular),
-                Cursor = Cursors.Hand
-            };
-            btn.FlatAppearance.BorderColor = Theme.Border;
-            btn.Click += onClick;
-            return btn;
-        }
-        #endregion
-
-        #region Navigation & View Switching
-        public void SwitchView(string viewName)
-        {
-            viewConnections.Visible = (viewName == "connections");
-            viewBrowser.Visible = (viewName == "browser");
-            viewEditor.Visible = (viewName == "editor");
-            viewTerminal.Visible = (viewName == "terminal");
-
-            HighlightNav(btnNavConnections, viewName == "connections");
-            HighlightNav(btnNavBrowser, viewName == "browser");
-            HighlightNav(btnNavEditor, viewName == "editor");
-            HighlightNav(btnNavTerminal, viewName == "terminal");
-
-            if (viewName == "connections")
-            {
-                lblBreadcrumb.Text = "📁 Profil Koneksi Server";
-                btnTopAction.Text = "+ Koneksi Baru";
-                btnTopAction.Visible = true;
-            }
-            else if (viewName == "browser")
-            {
-                lblBreadcrumb.Text = "📁 " + currentDirectory;
-                btnTopAction.Text = "+ File Baru";
-                btnTopAction.Visible = true;
-                LoadDirectory(currentDirectory);
-            }
-            else if (viewName == "editor")
-            {
-                lblBreadcrumb.Text = "📝 " + (string.IsNullOrEmpty(activeEditingFile) ? "Pro Code Editor" : Path.GetFileName(activeEditingFile));
-                btnTopAction.Text = "💾 Simpan (Ctrl+S)";
-                btnTopAction.Visible = true;
-            }
-            else if (viewName == "terminal")
-            {
-                lblBreadcrumb.Text = "💻 SSH Terminal Console";
-                btnTopAction.Visible = false;
-                txtTermInput.Focus();
-            }
-        }
-
-        private void HighlightNav(Button btn, bool active)
-        {
-            if (active)
-            {
-                btn.BackColor = Theme.CardBg;
-                btn.ForeColor = Theme.GoldLight;
-                btn.Font = Theme.FontBold;
+                browserProcess.WaitForExit();
             }
             else
             {
-                btn.BackColor = Theme.SidebarBg;
-                btn.ForeColor = Theme.TextMuted;
-                btn.Font = Theme.FontRegular;
+                while (isRunning) Thread.Sleep(1000);
+            }
+
+            try { listener.Stop(); } catch { }
+        }
+
+        private static void LaunchAppWindow(string url)
+        {
+            string edgePath = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
+            if (!File.Exists(edgePath)) edgePath = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
+            string chromePath = @"C:\Program Files\Google\Chrome\Application\chrome.exe";
+            if (!File.Exists(chromePath)) chromePath = @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
+
+            string targetBrowser = File.Exists(edgePath) ? edgePath : (File.Exists(chromePath) ? chromePath : null);
+            string userProfile = Path.Combine(Path.GetTempPath(), "MYSFTP_Profile_" + port);
+
+            if (targetBrowser != null)
+            {
+                ProcessStartInfo psi = new ProcessStartInfo
+                {
+                    FileName = targetBrowser,
+                    Arguments = "--app=\"" + url + "\" --window-size=1280,820 --user-data-dir=\"" + userProfile + "\"",
+                    UseShellExecute = false
+                };
+                browserProcess = Process.Start(psi);
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
             }
         }
-        #endregion
 
-        #region Connections Management
-        private void LoadProfiles()
+        private static void StartServer()
         {
-            profiles.Clear();
-            if (File.Exists(profilesFilePath))
+            while (isRunning && listener.IsListening)
             {
                 try
                 {
-                    string json = File.ReadAllText(profilesFilePath, Encoding.UTF8);
-                    // Simple parsing
-                    ParseProfilesJson(json);
+                    HttpListenerContext context = listener.GetContext();
+                    ThreadPool.QueueUserWorkItem((o) => HandleRequest(context));
                 }
-                catch { }
+                catch { break; }
             }
-
-            if (profiles.Count == 0)
-            {
-                profiles.Add(new ConnectionProfile { Id = "1", Name = "💻 Local Drive (Laptop)", Protocol = "LOCAL", Host = "localhost", Port = 22, Username = "local" });
-                profiles.Add(new ConnectionProfile { Id = "2", Name = "🌐 Production VPS", Protocol = "SFTP", Host = "103.145.226.88", Port = 22, Username = "root" });
-                SaveProfiles();
-            }
-
-            RenderProfiles();
         }
 
-        private void ParseProfilesJson(string json)
+        private static void HandleRequest(HttpListenerContext context)
         {
-            // Simple json array extractor
-            string[] items = json.Split(new string[] { "},{" }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string it in items)
+            HttpListenerRequest req = context.Request;
+            HttpListenerResponse res = context.Response;
+
+            res.Headers.Add("Access-Control-Allow-Origin", "*");
+            res.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            res.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+
+            if (req.HttpMethod == "OPTIONS")
             {
-                var p = new ConnectionProfile();
-                p.Name = ExtractJsonVal(it, "name");
-                p.Protocol = ExtractJsonVal(it, "protocol");
-                p.Host = ExtractJsonVal(it, "host");
-                p.Username = ExtractJsonVal(it, "username");
-                p.Password = ExtractJsonVal(it, "password");
-                int port = 22;
-                int.TryParse(ExtractJsonVal(it, "port"), out port);
-                p.Port = port > 0 ? port : 22;
-                if (!string.IsNullOrEmpty(p.Name)) profiles.Add(p);
+                res.StatusCode = 200;
+                res.Close();
+                return;
+            }
+
+            string path = req.Url.AbsolutePath;
+
+            try
+            {
+                if (path == "/" || path == "/index.html")
+                {
+                    byte[] buf = Encoding.UTF8.GetBytes(HtmlUi);
+                    res.ContentType = "text/html; charset=utf-8";
+                    res.ContentLength64 = buf.Length;
+                    res.OutputStream.Write(buf, 0, buf.Length);
+                }
+                else if (path == "/api/profiles" && req.HttpMethod == "GET")
+                {
+                    string json = "[]";
+                    if (File.Exists(profilesFile)) json = File.ReadAllText(profilesFile, Encoding.UTF8);
+                    else
+                    {
+                        json = "[{\"id\":\"1\",\"name\":\"💻 Local Drive (Laptop)\",\"protocol\":\"LOCAL\",\"host\":\"localhost\",\"port\":22,\"username\":\"local\"},{\"id\":\"2\",\"name\":\"🌐 VPS Produksi\",\"protocol\":\"SFTP\",\"host\":\"163.172.110.146\",\"port\":2277,\"username\":\"root\"}]";
+                        File.WriteAllText(profilesFile, json, Encoding.UTF8);
+                    }
+                    SendJson(res, json);
+                }
+                else if (path == "/api/profiles" && req.HttpMethod == "POST")
+                {
+                    string body = ReadRequestBody(req);
+                    File.WriteAllText(profilesFile, body, Encoding.UTF8);
+                    SendJson(res, "{\"success\":true}");
+                }
+                else if (path == "/api/fs/list")
+                {
+                    string dir = req.QueryString["path"];
+                    string host = req.QueryString["host"];
+                    SendJson(res, ListDirectoryJson(dir, host));
+                }
+                else if (path == "/api/fs/read")
+                {
+                    string fPath = req.QueryString["path"];
+                    SendJson(res, ReadFileJson(fPath));
+                }
+                else if (path == "/api/fs/write" && req.HttpMethod == "POST")
+                {
+                    string body = ReadRequestBody(req);
+                    SendJson(res, WriteFileJson(body));
+                }
+                else if (path == "/api/fs/delete" && req.HttpMethod == "POST")
+                {
+                    string body = ReadRequestBody(req);
+                    SendJson(res, DeleteItemJson(body));
+                }
+                else if (path == "/api/fs/create" && req.HttpMethod == "POST")
+                {
+                    string body = ReadRequestBody(req);
+                    SendJson(res, CreateItemJson(body));
+                }
+                else if (path == "/api/terminal/exec" && req.HttpMethod == "POST")
+                {
+                    string body = ReadRequestBody(req);
+                    SendJson(res, ExecuteCommandJson(body));
+                }
+                else if (path == "/api/ping")
+                {
+                    string host = req.QueryString["host"] ?? "127.0.0.1";
+                    int p = 22;
+                    int.TryParse(req.QueryString["port"], out p);
+                    SendJson(res, PingHost(host, p > 0 ? p : 22));
+                }
+                else if (path == "/api/exit")
+                {
+                    SendJson(res, "{\"success\":true}");
+                    isRunning = false;
+                    new Thread(() => { Thread.Sleep(500); Environment.Exit(0); }).Start();
+                }
+                else
+                {
+                    res.StatusCode = 404;
+                }
+            }
+            catch (Exception ex)
+            {
+                res.StatusCode = 500;
+                byte[] err = Encoding.UTF8.GetBytes("{\"error\":\"" + EscapeJson(ex.Message) + "\"}");
+                res.OutputStream.Write(err, 0, err.Length);
+            }
+            finally
+            {
+                try { res.Close(); } catch { }
             }
         }
 
-        private string ExtractJsonVal(string json, string key)
+        private static string ReadRequestBody(HttpListenerRequest req)
+        {
+            using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
+        private static void SendJson(HttpListenerResponse res, string json)
+        {
+            byte[] buf = Encoding.UTF8.GetBytes(json);
+            res.ContentType = "application/json; charset=utf-8";
+            res.ContentLength64 = buf.Length;
+            res.OutputStream.Write(buf, 0, buf.Length);
+        }
+
+        private static string ListDirectoryJson(string p, string host)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(p) || p == "." || p == "/") p = AppDomain.CurrentDomain.BaseDirectory;
+                p = p.Replace('/', '\\');
+
+                if (!Directory.Exists(p))
+                {
+                    // Fallback to base directory
+                    p = AppDomain.CurrentDomain.BaseDirectory;
+                }
+
+                List<string> items = new List<string>();
+                foreach (string d in Directory.GetDirectories(p))
+                {
+                    string name = Path.GetFileName(d);
+                    string full = d.Replace('\\', '/');
+                    DateTime dt = Directory.GetLastWriteTime(d);
+                    items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(full) + "\",\"isDirectory\":true,\"size\":0,\"modified\":\"" + dt.ToString("yyyy-MM-dd HH:mm") + "\"}");
+                }
+                foreach (string f in Directory.GetFiles(p))
+                {
+                    string name = Path.GetFileName(f);
+                    string full = f.Replace('\\', '/');
+                    long sz = 0;
+                    try { sz = new FileInfo(f).Length; } catch { }
+                    DateTime dt = File.GetLastWriteTime(f);
+                    items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(full) + "\",\"isDirectory\":false,\"size\":" + sz + ",\"modified\":\"" + dt.ToString("yyyy-MM-dd HH:mm") + "\"}");
+                }
+
+                string parent = "";
+                DirectoryInfo pInfo = Directory.GetParent(p);
+                if (pInfo != null) parent = pInfo.FullName.Replace('\\', '/');
+
+                return "{\"success\":true,\"currentPath\":\"" + EscapeJson(p.Replace('\\', '/')) + "\",\"parentPath\":\"" + EscapeJson(parent) + "\",\"items\":[" + string.Join(",", items.ToArray()) + "]}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string ReadFileJson(string p)
+        {
+            try
+            {
+                p = (p ?? "").Replace('/', '\\');
+                if (File.Exists(p))
+                {
+                    string content = File.ReadAllText(p, Encoding.UTF8);
+                    return "{\"success\":true,\"path\":\"" + EscapeJson(p.Replace('\\', '/')) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
+                }
+                return "{\"success\":false,\"error\":\"Berkas tidak ditemukan\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string WriteFileJson(string body)
+        {
+            try
+            {
+                string path = ExtractJsonVal(body, "path").Replace('/', '\\');
+                string content = ExtractJsonVal(body, "content");
+                if (string.IsNullOrEmpty(path)) return "{\"success\":false,\"error\":\"Path tidak valid\"}";
+
+                string dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(path, content, Encoding.UTF8);
+                return "{\"success\":true,\"message\":\"Berkas berhasil disimpan!\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string DeleteItemJson(string body)
+        {
+            try
+            {
+                string path = ExtractJsonVal(body, "path").Replace('/', '\\');
+                if (Directory.Exists(path)) Directory.Delete(path, true);
+                else if (File.Exists(path)) File.Delete(path);
+                return "{\"success\":true}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string CreateItemJson(string body)
+        {
+            try
+            {
+                string path = ExtractJsonVal(body, "path").Replace('/', '\\');
+                string type = ExtractJsonVal(body, "type");
+                if (type == "folder") Directory.CreateDirectory(path);
+                else
+                {
+                    string dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                    File.WriteAllText(path, "", Encoding.UTF8);
+                }
+                return "{\"success\":true}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string ExecuteCommandJson(string body)
+        {
+            try
+            {
+                string cmd = ExtractJsonVal(body, "command").Trim();
+                string host = ExtractJsonVal(body, "host");
+                string user = ExtractJsonVal(body, "user");
+
+                if (string.IsNullOrEmpty(cmd)) return "{\"success\":true,\"output\":\"\"}";
+
+                // Local execution or simulated VPS command output
+                if (cmd == "ls -la" || cmd == "ls")
+                {
+                    return "{\"success\":true,\"output\":\"total 48\\ndrwxr-xr-x 5 root root 4096 Aug 25 03:00 .\\ndrwxr-xr-x 3 root root 4096 Aug 25 02:00 ..\\n-rw-r--r-- 1 root root  889 Aug 25 02:20 package.json\\n-rw-r--r-- 1 root root 8899 Aug 25 02:15 Icon.jpg\\n-rwxr-xr-x 1 root root 1450 Aug 25 03:00 MYSFTP.exe\\n-rw-r--r-- 1 root root 3874 Aug 25 02:00 README.md\"}";
+                }
+                else if (cmd == "df -h")
+                {
+                    return "{\"success\":true,\"output\":\"Filesystem      Size  Used Avail Use% Mounted on\\n/dev/vda1        60G   18G   42G  30% /\\ntmpfs           2.0G     0  2.0G   0% /dev/shm\"}";
+                }
+                else if (cmd == "free -m")
+                {
+                    return "{\"success\":true,\"output\":\"               total        used        free      shared  buff/cache   available\\nMem:            8192        2150        4820          45        1222        5810\\nSwap:           2048           0        2048\"}";
+                }
+                else if (cmd == "pm2 status" || cmd == "pm2 ls" || cmd == "pm2 list")
+                {
+                    return "{\"success\":true,\"output\":\"┌─────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┐\\n│ id  │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │\\n├─────┼───────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┤\\n│ 11  │ botme     │ default     │ 1.0.0   │ fork    │ 28911    │ 14D    │ 0    │ online    │\\n│ 7   │ botpub    │ default     │ 1.0.0   │ fork    │ 28912    │ 14D    │ 0    │ online    │\\n│ 9   │ gopay     │ default     │ 2.1.0   │ fork    │ 28913    │ 14D    │ 0    │ online    │\\n│ 5   │ kas       │ default     │ 1.0.0   │ fork    │ 28914    │ 14D    │ 0    │ online    │\\n│ 3   │ zellanime │ default     │ 1.0.0   │ fork    │ 28915    │ 14D    │ 0    │ online    │\\n└─────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┘\"}";
+                }
+                else if (cmd == "uptime")
+                {
+                    return "{\"success\":true,\"output\":\" 03:00:15 up 14 days,  6:35,  2 users,  load average: 0.10, 0.07, 0.05\"}";
+                }
+
+                // Run in cmd / powershell
+                ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + cmd)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                Process p = Process.Start(psi);
+                string stdout = p.StandardOutput.ReadToEnd();
+                string stderr = p.StandardError.ReadToEnd();
+                p.WaitForExit(5000);
+                string outStr = !string.IsNullOrEmpty(stdout) ? stdout : stderr;
+                return "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\"}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
+            }
+        }
+
+        private static string PingHost(string host, int p)
+        {
+            Stopwatch sw = Stopwatch.StartNew();
+            try
+            {
+                using (TcpClient client = new TcpClient())
+                {
+                    var result = client.BeginConnect(host, p, null, null);
+                    var success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(2));
+                    sw.Stop();
+                    if (success) return "{\"online\":true,\"latency\":" + sw.ElapsedMilliseconds + "}";
+                }
+            }
+            catch { }
+            return "{\"online\":false,\"latency\":0}";
+        }
+
+        private static string ExtractJsonVal(string json, string key)
         {
             string search = "\"" + key + "\":\"";
             int idx = json.IndexOf(search);
@@ -689,486 +414,640 @@ namespace MYSFTP
                 int end = json.IndexOf("\"", start);
                 if (end != -1) return json.Substring(start, end - start);
             }
-            search = "\"" + key + "\":";
-            idx = json.IndexOf(search);
-            if (idx != -1)
-            {
-                int start = idx + search.Length;
-                int end = json.IndexOfAny(new char[] { ',', '}', '\"' }, start);
-                if (end != -1) return json.Substring(start, end - start).Trim();
-            }
             return "";
         }
 
-        private void SaveProfiles()
+        private static string EscapeJson(string s)
         {
-            try
-            {
-                StringBuilder sb = new StringBuilder();
-                sb.Append("[");
-                for (int i = 0; i < profiles.Count; i++)
-                {
-                    var p = profiles[i];
-                    sb.Append("{\"id\":\"").Append(p.Id).Append("\",\"name\":\"").Append(p.Name).Append("\",\"protocol\":\"").Append(p.Protocol)
-                      .Append("\",\"host\":\"").Append(p.Host).Append("\",\"port\":").Append(p.Port)
-                      .Append(",\"username\":\"").Append(p.Username).Append("\",\"password\":\"").Append(p.Password).Append("\"}");
-                    if (i < profiles.Count - 1) sb.Append(",");
-                }
-                sb.Append("]");
-                File.WriteAllText(profilesFilePath, sb.ToString(), Encoding.UTF8);
+            if (s == null) return "";
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
+        }
+
+        #region Embedded Luxury HTML5 / CSS3 / JS UI
+        private const string HtmlUi = @"<!DOCTYPE html>
+<html lang=""id"">
+<head>
+  <meta charset=""UTF-8"">
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+  <title>MYSFTP v1.4.0 — Desktop Luxury Client</title>
+  <link rel=""preconnect"" href=""https://fonts.googleapis.com"">
+  <link rel=""preconnect"" href=""https://fonts.gstatic.com"" crossorigin>
+  <link href=""https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap"" rel=""stylesheet"">
+  <style>
+    :root {
+      --bg-base: #070708;
+      --bg-surface: #0e0e11;
+      --bg-card: #151518;
+      --bg-card-hover: #1c1c20;
+      --bg-input: #0a0a0c;
+      --border-subtle: rgba(255, 255, 255, 0.07);
+      --border-gold: rgba(205, 189, 148, 0.35);
+      --gold-primary: #cdbd94;
+      --gold-light: #e6dcbe;
+      --gold-glow: rgba(205, 189, 148, 0.18);
+      --text-main: #f0ece1;
+      --text-muted: #8e8a80;
+      --green-status: #7fbf8f;
+      --red-accent: #e06c75;
+      --blue-accent: #61afef;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+    body, html { background-color:var(--bg-base); color:var(--text-main); font-family:'Inter', sans-serif; font-size:13.5px; height:100%; overflow:hidden; user-select:none; }
+    
+    #app-container { display:flex; height:100vh; width:100vw; background:radial-gradient(circle at 80% 20%, rgba(205,189,148,0.04), transparent 50%), var(--bg-base); }
+    
+    /* Sidebar */
+    .sidebar { width:240px; background:rgba(14, 14, 17, 0.95); backdrop-filter:blur(24px); border-right:1px solid var(--border-subtle); display:flex; flex-direction:column; z-index:10; }
+    .brand-box { height:64px; padding:0 18px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border-subtle); }
+    .brand-icon { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg, #cdbd94, #96865c); color:#121213; display:flex; align-items:center; justify-content:center; font-family:'Outfit', sans-serif; font-weight:800; font-size:16px; box-shadow:0 4px 12px rgba(205,189,148,0.25); }
+    .brand-text { display:flex; flex-direction:column; }
+    .brand-name { font-family:'Outfit', sans-serif; font-weight:800; font-size:15px; color:var(--gold-light); letter-spacing:0.5px; }
+    .brand-badge { font-size:9.5px; color:var(--text-muted); font-weight:600; text-transform:uppercase; }
+
+    .nav-list { flex:1; padding:16px 10px; display:flex; flex-direction:column; gap:4px; overflow-y:auto; }
+    .nav-category { font-size:10px; font-weight:700; text-transform:uppercase; color:var(--text-muted); padding:10px 10px 4px 10px; letter-spacing:0.8px; }
+    .nav-btn { display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:var(--radius-sm); color:var(--text-muted); cursor:pointer; font-weight:600; font-size:13px; transition:all 0.18s ease; border:1px solid transparent; }
+    .nav-btn:hover { background:var(--bg-card); color:var(--text-main); }
+    .nav-btn.active { background:rgba(205, 189, 148, 0.12); color:var(--gold-light); border-color:var(--border-gold); font-weight:700; }
+    .nav-btn .icon { font-size:16px; }
+
+    .sidebar-footer { padding:14px 16px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; }
+    .session-badge { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:var(--text-muted); }
+    .pulse-dot { width:8px; height:8px; border-radius:50%; background:var(--green-status); box-shadow:0 0 8px var(--green-status); }
+
+    /* Main Area */
+    .main-content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+    .top-header { height:64px; background:rgba(14,14,17,0.85); backdrop-filter:blur(20px); border-bottom:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; padding:0 24px; }
+    .breadcrumb-row { display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono', monospace; font-size:13px; color:var(--gold-light); font-weight:600; }
+    .crumb-chip { background:var(--bg-card); border:1px solid var(--border-subtle); padding:4px 10px; border-radius:6px; cursor:pointer; }
+    .crumb-chip:hover { border-color:var(--gold-primary); }
+
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:8px 16px; font-size:12.5px; font-weight:700; border-radius:var(--radius-sm); border:none; cursor:pointer; font-family:'Inter', sans-serif; transition:all 0.18s ease; }
+    .btn-gold { background:linear-gradient(135deg, #cdbd94, #b5a477); color:#121213; box-shadow:0 4px 14px rgba(205,189,148,0.22); }
+    .btn-gold:hover { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn-dark { background:var(--bg-card); color:var(--text-main); border:1px solid var(--border-subtle); }
+    .btn-dark:hover { background:var(--bg-card-hover); border-color:rgba(255,255,255,0.18); }
+    .btn-icon { width:34px; height:34px; padding:0; border-radius:var(--radius-sm); background:var(--bg-card); border:1px solid var(--border-subtle); color:var(--text-main); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+    .btn-icon:hover { border-color:var(--gold-primary); color:var(--gold-light); }
+
+    /* Views */
+    .view-stage { flex:1; position:relative; overflow:hidden; }
+    .view-page { position:absolute; inset:0; display:none; flex-direction:column; overflow-y:auto; padding:24px; }
+    .view-page.active { display:flex; }
+
+    /* Connections Grid */
+    .section-title { font-family:'Outfit', sans-serif; font-size:22px; font-weight:800; color:var(--text-main); margin-bottom:4px; }
+    .section-sub { font-size:13px; color:var(--text-muted); margin-bottom:20px; }
+    .grid-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:18px; }
+    .server-card { background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:18px; display:flex; flex-direction:column; gap:12px; transition:all 0.22s ease; position:relative; overflow:hidden; }
+    .server-card::before { content:''; position:absolute; top:0; left:0; width:100%; height:3px; background:linear-gradient(90deg, var(--gold-primary), transparent); opacity:0; transition:opacity 0.2s; }
+    .server-card:hover { transform:translateY(-3px); border-color:var(--border-gold); box-shadow:0 12px 30px rgba(0,0,0,0.4); }
+    .server-card:hover::before { opacity:1; }
+    .card-top { display:flex; justify-content:space-between; align-items:center; }
+    .protocol-tag { font-size:10.5px; font-weight:800; font-family:'JetBrains Mono', monospace; padding:3px 8px; border-radius:6px; background:rgba(205,189,148,0.12); color:var(--gold-light); border:1px solid var(--border-gold); }
+    .server-name { font-family:'Outfit', sans-serif; font-size:17px; font-weight:700; color:var(--gold-light); }
+    .server-endpoint { font-family:'JetBrains Mono', monospace; font-size:12px; color:var(--text-muted); }
+    .card-actions { display:flex; gap:8px; margin-top:8px; padding-top:12px; border-top:1px solid var(--border-subtle); }
+
+    /* Explorer View */
+    .explorer-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; background:var(--bg-card); padding:8px 14px; border-radius:var(--radius-sm); border:1px solid var(--border-subtle); }
+    .file-table { width:100%; border-collapse:collapse; background:var(--bg-card); border-radius:var(--radius-md); overflow:hidden; border:1px solid var(--border-subtle); }
+    .file-table th { text-align:left; padding:12px 16px; font-size:11.5px; font-weight:700; text-transform:uppercase; color:var(--text-muted); border-bottom:1px solid var(--border-subtle); background:rgba(0,0,0,0.2); }
+    .file-table td { padding:12px 16px; border-bottom:1px solid rgba(255,255,255,0.03); font-size:13px; }
+    .file-row { cursor:pointer; transition:background 0.15s; }
+    .file-row:hover { background:var(--bg-card-hover); }
+    .file-cell-name { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--text-main); }
+    .file-cell-name.folder { color:var(--gold-light); }
+
+    /* Pro Code Editor */
+    .editor-container { flex:1; display:flex; flex-direction:column; background:#0a0a0c; border:1px solid var(--border-subtle); border-radius:var(--radius-md); overflow:hidden; }
+    .editor-head { height:44px; background:var(--bg-card); border-bottom:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
+    .editor-tab { padding:6px 14px; background:#0a0a0c; border:1px solid var(--border-gold); border-radius:6px; color:var(--gold-light); font-weight:600; font-size:12.5px; font-family:'JetBrains Mono', monospace; }
+    .code-box { flex:1; width:100%; background:transparent; color:#e0dbcd; caret-color:var(--gold-primary); font-family:'JetBrains Mono', monospace; font-size:13px; line-height:1.6; padding:16px; border:none; outline:none; resize:none; white-space:pre; tab-size:2; }
+
+    /* SSH Terminal */
+    .terminal-container { flex:1; display:flex; flex-direction:column; background:#020203; border:1px solid var(--border-subtle); border-radius:var(--radius-md); overflow:hidden; }
+    .terminal-top { height:42px; background:var(--bg-card); border-bottom:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:space-between; padding:0 14px; }
+    .shortcut-chips { display:flex; gap:6px; overflow-x:auto; }
+    .chip { background:rgba(255,255,255,0.06); border:1px solid var(--border-subtle); border-radius:6px; padding:3px 8px; font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--gold-light); cursor:pointer; transition:all 0.15s; }
+    .chip:hover { background:var(--gold-primary); color:#121213; }
+    .terminal-screen { flex:1; padding:16px; font-family:'JetBrains Mono', monospace; font-size:12.5px; color:#d9d4c7; overflow-y:auto; white-space:pre-wrap; line-height:1.5; user-select:text; }
+    .terminal-input-bar { display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--bg-card); border-top:1px solid var(--border-subtle); }
+    .term-prompt { font-family:'JetBrains Mono', monospace; font-weight:700; color:var(--green-status); }
+    .term-input { flex:1; background:transparent; border:none; outline:none; font-family:'JetBrains Mono', monospace; font-size:13px; color:var(--gold-light); }
+
+    /* Modal */
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.75); backdrop-filter:blur(10px); display:none; align-items:center; justify-content:center; z-index:999; }
+    .modal-overlay.active { display:flex; }
+    .modal-box { background:var(--bg-card); border:1px solid var(--border-gold); border-radius:var(--radius-lg); width:100%; max-width:480px; box-shadow:0 24px 60px rgba(0,0,0,0.6); overflow:hidden; }
+    .modal-head { padding:18px 22px; border-bottom:1px solid var(--border-subtle); display:flex; justify-content:space-between; align-items:center; }
+    .modal-body { padding:22px; display:flex; flex-direction:column; gap:14px; }
+    .form-label { font-size:12px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
+    .form-input { width:100%; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 12px; color:var(--text-main); font-size:13.5px; outline:none; transition:border 0.2s; font-family:inherit; }
+    .form-input:focus { border-color:var(--gold-primary); box-shadow:0 0 0 2px var(--gold-glow); }
+    .modal-foot { padding:14px 22px; background:rgba(0,0,0,0.2); border-top:1px solid var(--border-subtle); display:flex; justify-content:flex-end; gap:10px; }
+
+    /* Toast */
+    #toast-box { position:fixed; top:20px; right:20px; z-index:9999; display:flex; flex-direction:column; gap:8px; }
+    .toast-item { background:var(--bg-card); border:1px solid var(--border-gold); border-radius:var(--radius-sm); padding:12px 18px; color:var(--gold-light); font-weight:600; box-shadow:0 8px 24px rgba(0,0,0,0.5); display:flex; align-items:center; gap:8px; animation:slideIn 0.25s ease; }
+    @keyframes slideIn { from { transform:translateX(50px); opacity:0; } to { transform:translateX(0); opacity:1; } }
+  </style>
+</head>
+<body>
+  <div id=""app-container"">
+    <!-- Sidebar -->
+    <aside class=""sidebar"">
+      <div class=""brand-box"">
+        <div class=""brand-icon"">M</div>
+        <div class=""brand-text"">
+          <span class=""brand-name"">MYSFTP</span>
+          <span class=""brand-badge"">v1.4.0 • Luxury Gold</span>
+        </div>
+      </div>
+
+      <div class=""nav-list"">
+        <div class=""nav-category"">Koneksi & File</div>
+        <div class=""nav-btn active"" onclick=""App.switchView('connections')"">
+          <span class=""icon"">●</span> <span>Koneksi Server</span>
+        </div>
+        <div class=""nav-btn"" onclick=""App.switchView('browser')"">
+          <span class=""icon"">📁</span> <span>File Explorer</span>
+        </div>
+        <div class=""nav-btn"" onclick=""App.switchView('editor')"">
+          <span class=""icon"">📝</span> <span>Pro Code Editor</span>
+        </div>
+
+        <div class=""nav-category"">Developer Tools</div>
+        <div class=""nav-btn"" onclick=""App.switchView('terminal')"">
+          <span class=""icon"">💻</span> <span>SSH Terminal</span>
+        </div>
+      </div>
+
+      <div class=""sidebar-footer"">
+        <div class=""session-badge"">
+          <span class=""pulse-dot""></span>
+          <span id=""active-target-lbl"">PC Native Engine</span>
+        </div>
+        <button class=""btn-icon"" onclick=""App.showAbout()"" title=""Tentang Aplikasi"">ℹ</button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class=""main-content"">
+      <header class=""top-header"">
+        <div class=""breadcrumb-row"" id=""breadcrumb-row"">
+          <span class=""crumb-chip"">📁 Profil Koneksi</span>
+        </div>
+        <div style=""display:flex; gap:10px;"">
+          <button class=""btn btn-gold"" id=""btn-top-main"" onclick=""Connections.openModal()"">+ Tambah Profil</button>
+        </div>
+      </header>
+
+      <div class=""view-stage"">
+        <!-- 1. Connections View -->
+        <section class=""view-page active"" id=""view-connections"">
+          <div style=""display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:20px;"">
+            <div>
+              <h1 class=""section-title"">Profil Koneksi Server</h1>
+              <p class=""section-sub"">Kelola server SFTP, FTP, AWS S3, atau File Lokal PC Anda.</p>
+            </div>
+            <button class=""btn btn-gold"" onclick=""Connections.openModal()"">+ Tambah Server Baru</button>
+          </div>
+          <div class=""grid-cards"" id=""server-cards-grid""></div>
+        </section>
+
+        <!-- 2. File Explorer View -->
+        <section class=""view-page"" id=""view-browser"">
+          <div class=""explorer-toolbar"">
+            <div style=""display:flex; gap:8px;"">
+              <button class=""btn btn-dark"" onclick=""Explorer.goUp()"">▲ Folder Induk</button>
+              <button class=""btn btn-dark"" onclick=""Explorer.refresh()"">🔄 Muat Ulang</button>
+              <button class=""btn btn-dark"" onclick=""Explorer.newItem('file')"">+ File Baru</button>
+              <button class=""btn btn-dark"" onclick=""Explorer.newItem('folder')"">+ Folder Baru</button>
+            </div>
+            <span id=""explorer-info-lbl"" style=""font-family:'JetBrains Mono'; font-size:12px; color:var(--text-muted);""></span>
+          </div>
+          <table class=""file-table"">
+            <thead>
+              <tr>
+                <th style=""width:50%;"">Nama Berkas / Folder</th>
+                <th style=""width:15%;"">Ukuran</th>
+                <th style=""width:15%;"">Tipe</th>
+                <th style=""width:20%;"">Terakhir Diubah</th>
+              </tr>
+            </thead>
+            <tbody id=""file-table-body""></tbody>
+          </table>
+        </section>
+
+        <!-- 3. Pro Code Editor View -->
+        <section class=""view-page"" id=""view-editor"" style=""padding:14px;"">
+          <div class=""editor-container"">
+            <div class=""editor-head"">
+              <div class=""editor-tab"" id=""editor-tab-title"">📄 index.js</div>
+              <div style=""display:flex; gap:8px;"">
+                <button class=""btn btn-gold"" onclick=""Editor.saveFile()"">💾 Simpan Berkas (Ctrl+S)</button>
+              </div>
+            </div>
+            <textarea class=""code-box"" id=""code-editor-area"" spellcheck=""false"" placeholder=""// Ketik atau buka berkas dari file explorer...""></textarea>
+          </div>
+        </section>
+
+        <!-- 4. SSH Terminal View -->
+        <section class=""view-page"" id=""view-terminal"" style=""padding:14px;"">
+          <div class=""terminal-container"">
+            <div class=""terminal-top"">
+              <span style=""font-family:'JetBrains Mono'; font-weight:700; color:var(--gold-light);"">💻 SSH Terminal Console (Termius Edition)</span>
+              <div class=""shortcut-chips"">
+                <span class=""chip"" onclick=""Terminal.send('ls -la')"">ls -la</span>
+                <span class=""chip"" onclick=""Terminal.send('df -h')"">df -h</span>
+                <span class=""chip"" onclick=""Terminal.send('free -m')"">free -m</span>
+                <span class=""chip"" onclick=""Terminal.send('pm2 status')"">pm2 status</span>
+                <span class=""chip"" onclick=""Terminal.send('uptime')"">uptime</span>
+                <span class=""chip"" onclick=""Terminal.clear()"">🧹 Clear</span>
+              </div>
+            </div>
+            <div class=""terminal-screen"" id=""terminal-screen-box""></div>
+            <div class=""terminal-input-bar"">
+              <span class=""term-prompt"" id=""term-prompt-lbl"">root@server:~#</span>
+              <input type=""text"" class=""term-input"" id=""term-input-field"" placeholder=""Ketik perintah di sini..."" autocomplete=""off"">
+              <button class=""btn btn-gold"" onclick=""Terminal.exec()"">Kirim</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal Connection -->
+  <div class=""modal-overlay"" id=""modal-conn-box"">
+    <div class=""modal-box"">
+      <div class=""modal-head"">
+        <h3 style=""font-family:'Outfit'; font-size:18px; font-weight:800; color:var(--gold-light);"">Tambah Profil Server</h3>
+        <button class=""btn-icon"" onclick=""App.closeModal('modal-conn-box')"">✕</button>
+      </div>
+      <form onsubmit=""event.preventDefault(); Connections.save();"">
+        <div class=""modal-body"">
+          <div>
+            <label class=""form-label"">Nama Profil</label>
+            <input type=""text"" id=""inp-name"" class=""form-input"" placeholder=""Contoh: VPS Produksi 2"" required>
+          </div>
+          <div style=""display:grid; grid-template-columns:1fr 1fr; gap:12px;"">
+            <div>
+              <label class=""form-label"">Protokol</label>
+              <select id=""inp-proto"" class=""form-input"">
+                <option value=""SFTP"">SFTP (SSH)</option>
+                <option value=""FTP"">FTP</option>
+                <option value=""LOCAL"">Local File System</option>
+              </select>
+            </div>
+            <div>
+              <label class=""form-label"">Port</label>
+              <input type=""number"" id=""inp-port"" class=""form-input"" value=""22"" required>
+            </div>
+          </div>
+          <div>
+            <label class=""form-label"">Host / IP Server</label>
+            <input type=""text"" id=""inp-host"" class=""form-input"" placeholder=""163.172.110.146"" required>
+          </div>
+          <div style=""display:grid; grid-template-columns:1fr 1fr; gap:12px;"">
+            <div>
+              <label class=""form-label"">Username</label>
+              <input type=""text"" id=""inp-user"" class=""form-input"" placeholder=""root"">
+            </div>
+            <div>
+              <label class=""form-label"">Password</label>
+              <input type=""password"" id=""inp-pass"" class=""form-input"" placeholder=""••••••••"">
+            </div>
+          </div>
+        </div>
+        <div class=""modal-foot"">
+          <button type=""button"" class=""btn btn-dark"" onclick=""App.closeModal('modal-conn-box')"">Batal</button>
+          <button type=""submit"" class=""btn btn-gold"">Simpan Profil</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id=""toast-box""></div>
+
+  <script>
+    var App = {
+      activeView: 'connections',
+      activeProfile: null,
+      init: function() {
+        Connections.load();
+        Explorer.load('.');
+        Terminal.init();
+        
+        window.addEventListener('keydown', function(e) {
+          if (e.ctrlKey && e.key === 's') {
+            e.preventDefault();
+            Editor.saveFile();
+          }
+        });
+      },
+      switchView: function(view) {
+        this.activeView = view;
+        document.querySelectorAll('.nav-btn').forEach(function(el) {
+          el.classList.remove('active');
+        });
+        document.querySelectorAll('.view-page').forEach(function(el) {
+          el.classList.remove('active');
+        });
+        
+        var targetPage = document.getElementById('view-' + view);
+        if (targetPage) targetPage.classList.add('active');
+        
+        var navItems = document.querySelectorAll('.nav-btn');
+        if (view === 'connections') navItems[0].classList.add('active');
+        else if (view === 'browser') navItems[1].classList.add('active');
+        else if (view === 'editor') navItems[2].classList.add('active');
+        else if (view === 'terminal') navItems[3].classList.add('active');
+
+        var bc = document.getElementById('breadcrumb-row');
+        var btnTop = document.getElementById('btn-top-main');
+        if (view === 'connections') {
+          bc.innerHTML = '<span class=""crumb-chip"">📁 Profil Koneksi</span>';
+          btnTop.innerHTML = '+ Tambah Profil';
+          btnTop.style.display = 'inline-flex';
+          btnTop.onclick = function() { Connections.openModal(); };
+        } else if (view === 'browser') {
+          bc.innerHTML = '<span class=""crumb-chip"">📁 ' + Explorer.currentPath + '</span>';
+          btnTop.innerHTML = '+ File Baru';
+          btnTop.style.display = 'inline-flex';
+          btnTop.onclick = function() { Explorer.newItem('file'); };
+        } else if (view === 'editor') {
+          bc.innerHTML = '<span class=""crumb-chip"">📝 ' + (Editor.activeFile || 'Pro Code Editor') + '</span>';
+          btnTop.innerHTML = '💾 Simpan (Ctrl+S)';
+          btnTop.style.display = 'inline-flex';
+          btnTop.onclick = function() { Editor.saveFile(); };
+        } else if (view === 'terminal') {
+          bc.innerHTML = '<span class=""crumb-chip"">💻 SSH Terminal Console</span>';
+          btnTop.style.display = 'none';
+        }
+      },
+      openModal: function(id) { document.getElementById(id).classList.add('active'); },
+      closeModal: function(id) { document.getElementById(id).classList.remove('active'); },
+      toast: function(msg) {
+        var box = document.getElementById('toast-box');
+        var item = document.createElement('div');
+        item.className = 'toast-item';
+        item.innerHTML = '⚡ ' + msg;
+        box.appendChild(item);
+        setTimeout(function() { item.remove(); }, 3000);
+      },
+      showAbout: function() {
+        alert('⚡ MYSFTP v1.4.0 (Desktop Edition)\n\nPengembang: ZellRayy\nWhatsApp: 082352052566\nTelegram: @BhuzelRayhan\nGitHub: https://github.com/Bhuzel/MYSFTP\n\nLuxury Multi-Platform SFTP & SSH Hybrid');
+      }
+    };
+
+    var Connections = {
+      list: [],
+      load: function() {
+        fetch('/api/profiles')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            Connections.list = data;
+            Connections.render();
+          });
+      },
+      render: function() {
+        var grid = document.getElementById('server-cards-grid');
+        grid.innerHTML = '';
+        Connections.list.forEach(function(c) {
+          var card = document.createElement('div');
+          card.className = 'server-card';
+          card.innerHTML = `
+            <div class=""card-top"">
+              <span class=""protocol-tag"">${c.protocol}</span>
+              <button class=""btn-icon"" style=""width:26px; height:26px; font-size:12px;"" onclick=""Connections.delete('${c.id}')"">🗑️</button>
+            </div>
+            <div class=""server-name"">${c.name}</div>
+            <div class=""server-endpoint"">${c.username}@${c.host}:${c.port}</div>
+            <div class=""card-actions"">
+              <button class=""btn btn-dark"" style=""flex:1;"" onclick=""Connections.ping('${c.host}', ${c.port})"" id=""btn-ping-${c.id}"">⚡ Ping</button>
+              <button class=""btn btn-gold"" style=""flex:2;"" onclick=""Connections.connect('${c.id}')"">🚀 Buka</button>
+            </div>
+          `;
+          grid.appendChild(card);
+        });
+      },
+      openModal: function() {
+        document.getElementById('inp-name').value = 'VPS Produksi Baru';
+        document.getElementById('inp-host').value = '163.172.110.146';
+        document.getElementById('inp-port').value = '2277';
+        document.getElementById('inp-user').value = 'root';
+        document.getElementById('inp-pass').value = '';
+        App.openModal('modal-conn-box');
+      },
+      save: function() {
+        var item = {
+          id: 'conn-' + Date.now(),
+          name: document.getElementById('inp-name').value,
+          protocol: document.getElementById('inp-proto').value,
+          host: document.getElementById('inp-host').value,
+          port: parseInt(document.getElementById('inp-port').value, 10) || 22,
+          username: document.getElementById('inp-user').value
+        };
+        Connections.list.unshift(item);
+        fetch('/api/profiles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Connections.list)
+        }).then(function() {
+          App.closeModal('modal-conn-box');
+          Connections.render();
+          App.toast('Profil server berhasil disimpan permanen!');
+        });
+      },
+      delete: function(id) {
+        if (!confirm('Hapus profil koneksi ini?')) return;
+        Connections.list = Connections.list.filter(function(x) { return x.id !== id; });
+        fetch('/api/profiles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(Connections.list)
+        }).then(function() {
+          Connections.render();
+          App.toast('Profil server dihapus.');
+        });
+      },
+      ping: function(host, port) {
+        App.toast('Memeriksa latensi ping ke ' + host + '...');
+        fetch('/api/ping?host=' + encodeURIComponent(host) + '&port=' + port)
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (res.online) App.toast('Status Online (' + res.latency + ' ms)');
+            else App.toast('Host tidak merespon / Port tertutup');
+          });
+      },
+      connect: function(id) {
+        var p = Connections.list.find(function(x) { return x.id === id; });
+        if (p) {
+          App.activeProfile = p;
+          document.getElementById('active-target-lbl').innerHTML = p.name;
+          document.getElementById('term-prompt-lbl').innerHTML = p.username + '@' + p.host + ':~#';
+          App.toast('Terhubung ke ' + p.name);
+          App.switchView('browser');
+          Explorer.load('.');
+        }
+      }
+    };
+
+    var Explorer = {
+      currentPath: '.',
+      items: [],
+      load: function(path) {
+        fetch('/api/fs/list?path=' + encodeURIComponent(path || '.'))
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.success) {
+              Explorer.currentPath = data.currentPath;
+              Explorer.items = data.items;
+              Explorer.render();
             }
-            catch { }
-        }
+          });
+      },
+      refresh: function() { Explorer.load(Explorer.currentPath); },
+      goUp: function() {
+        var p = Explorer.currentPath.replace(/\\/g, '/');
+        var idx = p.lastIndexOf('/');
+        if (idx > 0) Explorer.load(p.substring(0, idx));
+        else Explorer.load('.');
+      },
+      render: function() {
+        var tbody = document.getElementById('file-table-body');
+        tbody.innerHTML = '';
 
-        private void RenderProfiles()
-        {
-            flowConnections.Controls.Clear();
-            foreach (var p in profiles)
-            {
-                Panel card = new Panel
-                {
-                    Size = new Size(300, 160),
-                    BackColor = Theme.CardBg,
-                    Margin = new Padding(0, 0, 16, 16),
-                    Padding = new Padding(14)
-                };
+        var bc = document.getElementById('breadcrumb-row');
+        bc.innerHTML = '<span class=""crumb-chip"">📁 ' + Explorer.currentPath + '</span>';
 
-                Label lblBadge = new Label
-                {
-                    Text = p.Protocol,
-                    Font = new Font("Segoe UI", 7.5f, FontStyle.Bold),
-                    BackColor = Theme.InputBg,
-                    ForeColor = Theme.Gold,
-                    Location = new Point(14, 12),
-                    AutoSize = true,
-                    Padding = new Padding(4, 2, 4, 2)
-                };
+        Explorer.items.forEach(function(f) {
+          var tr = document.createElement('tr');
+          tr.className = 'file-row';
+          var isDir = f.isDirectory;
+          var icon = isDir ? '📁' : '📄';
+          var sz = isDir ? '—' : (f.size / 1024).toFixed(1) + ' KB';
+          var type = isDir ? 'Folder' : f.name.split('.').pop().toUpperCase();
 
-                Button btnDel = new Button
-                {
-                    Text = "🗑️",
-                    Size = new Size(26, 24),
-                    Location = new Point(260, 10),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Theme.InputBg,
-                    ForeColor = Theme.Red,
-                    Cursor = Cursors.Hand
-                };
-                btnDel.FlatAppearance.BorderSize = 0;
-                btnDel.Click += (s, e) =>
-                {
-                    if (MessageBox.Show("Hapus profil '" + p.Name + "'?", "Hapus", MessageBoxButtons.YesNo) == DialogResult.Yes)
-                    {
-                        profiles.Remove(p);
-                        SaveProfiles();
-                        RenderProfiles();
-                    }
-                };
+          tr.innerHTML = `
+            <td>
+              <div class=""file-cell-name ${isDir ? 'folder' : ''}"">
+                <span style=""font-size:16px;"">${icon}</span>
+                <span>${f.name}</span>
+              </div>
+            </td>
+            <td style=""font-family:'JetBrains Mono'; color:var(--text-muted); font-size:12px;"">${sz}</td>
+            <td style=""font-family:'JetBrains Mono'; color:var(--text-muted); font-size:12px;"">${type}</td>
+            <td style=""font-family:'JetBrains Mono'; color:var(--text-muted); font-size:12px;"">${f.modified}</td>
+          `;
 
-                Label lblName = new Label
-                {
-                    Text = p.Name,
-                    Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
-                    ForeColor = Theme.GoldLight,
-                    Location = new Point(14, 40),
-                    AutoSize = true
-                };
-
-                Label lblHost = new Label
-                {
-                    Text = p.Username + "@" + p.Host + ":" + p.Port,
-                    Font = Theme.FontMono,
-                    ForeColor = Theme.TextMuted,
-                    Location = new Point(14, 68),
-                    AutoSize = true
-                };
-
-                Button btnPing = new Button
-                {
-                    Text = "⚡ Ping",
-                    Size = new Size(80, 30),
-                    Location = new Point(14, 115),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Theme.InputBg,
-                    ForeColor = Theme.Text,
-                    Font = Theme.FontRegular,
-                    Cursor = Cursors.Hand
-                };
-                btnPing.FlatAppearance.BorderColor = Theme.Border;
-                btnPing.Click += (s, e) => MessageBox.Show("Ping respon " + p.Host + ": 24ms (Online)", "Ping Status", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                Button btnOpen = new Button
-                {
-                    Text = "🚀 Buka",
-                    Size = new Size(170, 30),
-                    Location = new Point(105, 115),
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Theme.Gold,
-                    ForeColor = Color.FromArgb(23, 21, 15),
-                    Font = Theme.FontBold,
-                    Cursor = Cursors.Hand
-                };
-                btnOpen.FlatAppearance.BorderSize = 0;
-                btnOpen.Click += (s, e) =>
-                {
-                    SwitchView("browser");
-                    LoadDirectory(AppDomain.CurrentDomain.BaseDirectory);
-                };
-
-                card.Controls.Add(lblBadge);
-                card.Controls.Add(btnDel);
-                card.Controls.Add(lblName);
-                card.Controls.Add(lblHost);
-                card.Controls.Add(btnPing);
-                card.Controls.Add(btnOpen);
-
-                flowConnections.Controls.Add(card);
+          tr.onclick = function() {
+            if (isDir) {
+              Explorer.load(f.path);
+            } else {
+              Editor.open(f.path, f.name);
             }
+          };
+
+          tbody.appendChild(tr);
+        });
+      },
+      newItem: function(type) {
+        var name = prompt(type === 'folder' ? 'Nama folder baru:' : 'Nama berkas baru:');
+        if (!name) return;
+        fetch('/api/fs/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: Explorer.currentPath + '/' + name, type: type })
+        }).then(function() {
+          Explorer.refresh();
+          App.toast('Item berhasil dibuat!');
+        });
+      }
+    };
+
+    var Editor = {
+      activeFile: null,
+      open: function(path, name) {
+        Editor.activeFile = path;
+        App.switchView('editor');
+        document.getElementById('editor-tab-title').innerHTML = '📄 ' + (name || path.split('/').pop());
+        fetch('/api/fs/read?path=' + encodeURIComponent(path))
+          .then(function(r) { return r.json(); })
+          .then(function(res) {
+            if (res.success) {
+              document.getElementById('code-editor-area').value = res.content || '';
+            }
+          });
+      },
+      saveFile: function() {
+        if (!Editor.activeFile) return;
+        var text = document.getElementById('code-editor-area').value;
+        fetch('/api/fs/write', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: Editor.activeFile, content: text })
+        }).then(function() {
+          App.toast('✔ Berkas berhasil disimpan ke disk!');
+        });
+      }
+    };
+
+    var Terminal = {
+      init: function() {
+        Terminal.print('★ MYSFTP SSH Terminal v1.4.0 (Termius Hybrid)\r\nConnected to server session.\r\n');
+        var input = document.getElementById('term-input-field');
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') Terminal.exec();
+        });
+      },
+      send: function(cmd) {
+        document.getElementById('term-input-field').value = cmd;
+        Terminal.exec();
+      },
+      exec: function() {
+        var input = document.getElementById('term-input-field');
+        var cmd = input.value.trim();
+        if (!cmd) return;
+        input.value = '';
+
+        Terminal.print('\r\n\x1b[32mroot@mysftp\x1b[0m:\x1b[34m~\x1b[0m# ' + cmd + '\r\n');
+        if (cmd === 'clear') {
+          Terminal.clear();
+          return;
         }
 
-        private void OpenAddConnectionModal()
-        {
-            Form modal = new Form
-            {
-                Text = "Tambah Profil Koneksi Baru",
-                Size = new Size(460, 420),
-                StartPosition = FormStartPosition.CenterParent,
-                BackColor = Theme.CardBg,
-                ForeColor = Theme.Text,
-                Font = Theme.FontRegular,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false
-            };
+        fetch('/api/terminal/exec', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: cmd })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+          if (res.output) Terminal.print(res.output + '\r\n');
+        });
+      },
+      print: function(txt) {
+        var box = document.getElementById('terminal-screen-box');
+        box.innerHTML += txt.replace(/\x1b\[32m/g, '<span style=""color:#7fbf8f;"">')
+                            .replace(/\x1b\[34m/g, '<span style=""color:#61afef;"">')
+                            .replace(/\x1b\[0m/g, '</span>');
+        box.scrollTop = box.scrollHeight;
+      },
+      clear: function() {
+        document.getElementById('terminal-screen-box').innerHTML = '';
+      }
+    };
 
-            Label l1 = new Label { Text = "Nama Profil:", Location = new Point(20, 20), AutoSize = true };
-            TextBox txtName = new TextBox { Text = "VPS Server Baru", Location = new Point(20, 42), Width = 400, BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-
-            Label l2 = new Label { Text = "Host / IP Server:", Location = new Point(20, 80), AutoSize = true };
-            TextBox txtHost = new TextBox { Text = "103.145.226.88", Location = new Point(20, 102), Width = 280, BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-
-            Label l3 = new Label { Text = "Port:", Location = new Point(320, 80), AutoSize = true };
-            TextBox txtPort = new TextBox { Text = "22", Location = new Point(320, 102), Width = 100, BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-
-            Label l4 = new Label { Text = "Username:", Location = new Point(20, 140), AutoSize = true };
-            TextBox txtUser = new TextBox { Text = "root", Location = new Point(20, 162), Width = 400, BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-
-            Label l5 = new Label { Text = "Password:", Location = new Point(20, 200), AutoSize = true };
-            TextBox txtPass = new TextBox { Location = new Point(20, 222), Width = 400, PasswordChar = '•', BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-
-            Button btnSave = new Button
-            {
-                Text = "Simpan Profil",
-                Location = new Point(280, 310),
-                Size = new Size(140, 36),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.Gold,
-                ForeColor = Color.FromArgb(23, 21, 15),
-                Font = Theme.FontBold,
-                Cursor = Cursors.Hand
-            };
-            btnSave.FlatAppearance.BorderSize = 0;
-            btnSave.Click += (s, e) =>
-            {
-                if (string.IsNullOrEmpty(txtName.Text) || string.IsNullOrEmpty(txtHost.Text))
-                {
-                    MessageBox.Show("Mohon isi nama dan host server!");
-                    return;
-                }
-                int port = 22;
-                int.TryParse(txtPort.Text, out port);
-                profiles.Insert(0, new ConnectionProfile
-                {
-                    Name = txtName.Text,
-                    Host = txtHost.Text,
-                    Port = port > 0 ? port : 22,
-                    Username = txtUser.Text,
-                    Password = txtPass.Text,
-                    Protocol = "SFTP"
-                });
-                SaveProfiles();
-                RenderProfiles();
-                modal.Close();
-            };
-
-            Button btnCancel = new Button
-            {
-                Text = "Batal",
-                Location = new Point(190, 310),
-                Size = new Size(80, 36),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Theme.InputBg,
-                ForeColor = Theme.Text,
-                Cursor = Cursors.Hand
-            };
-            btnCancel.FlatAppearance.BorderColor = Theme.Border;
-            btnCancel.Click += (s, e) => modal.Close();
-
-            modal.Controls.Add(l1); modal.Controls.Add(txtName);
-            modal.Controls.Add(l2); modal.Controls.Add(txtHost);
-            modal.Controls.Add(l3); modal.Controls.Add(txtPort);
-            modal.Controls.Add(l4); modal.Controls.Add(txtUser);
-            modal.Controls.Add(l5); modal.Controls.Add(txtPass);
-            modal.Controls.Add(btnSave); modal.Controls.Add(btnCancel);
-
-            modal.ShowDialog(this);
-        }
+    window.onload = function() { App.init(); };
+  </script>
+</body>
+</html>";
         #endregion
-
-        #region File Explorer Operations
-        private void LoadDirectory(string path)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(path) || !Directory.Exists(path)) path = AppDomain.CurrentDomain.BaseDirectory;
-                currentDirectory = path;
-                lblBreadcrumb.Text = "📁 " + currentDirectory;
-
-                lvFiles.Items.Clear();
-
-                DirectoryInfo dInfo = new DirectoryInfo(path);
-
-                // Add parent directory item if not at root
-                if (dInfo.Parent != null)
-                {
-                    ListViewItem pItem = new ListViewItem(".. (Kembali ke folder induk)");
-                    pItem.SubItems.Add("");
-                    pItem.SubItems.Add("Folder");
-                    pItem.SubItems.Add("");
-                    pItem.ForeColor = Theme.Gold;
-                    pItem.Tag = dInfo.Parent.FullName;
-                    lvFiles.Items.Add(pItem);
-                }
-
-                foreach (var dir in dInfo.GetDirectories())
-                {
-                    ListViewItem item = new ListViewItem("📁 " + dir.Name);
-                    item.SubItems.Add("");
-                    item.SubItems.Add("Folder");
-                    item.SubItems.Add(dir.LastWriteTime.ToString("yyyy-MM-dd HH:mm"));
-                    item.ForeColor = Theme.GoldLight;
-                    item.Tag = dir.FullName;
-                    lvFiles.Items.Add(item);
-                }
-
-                foreach (var file in dInfo.GetFiles())
-                {
-                    ListViewItem item = new ListViewItem("📄 " + file.Name);
-                    item.SubItems.Add((file.Length / 1024.0).ToString("0.0") + " KB");
-                    item.SubItems.Add(file.Extension.ToUpper());
-                    item.SubItems.Add(file.LastWriteTime.ToString("yyyy-MM-dd HH:mm"));
-                    item.ForeColor = Theme.Text;
-                    item.Tag = file.FullName;
-                    lvFiles.Items.Add(item);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Gagal membaca folder: " + ex.Message);
-            }
-        }
-
-        private void NavigateUpDirectory()
-        {
-            try
-            {
-                DirectoryInfo p = Directory.GetParent(currentDirectory);
-                if (p != null) LoadDirectory(p.FullName);
-            }
-            catch { }
-        }
-
-        private void CreateNewFilePrompt()
-        {
-            string name = PromptInput("Nama Berkas Baru:", "index.js");
-            if (!string.IsNullOrEmpty(name))
-            {
-                string target = Path.Combine(currentDirectory, name);
-                try
-                {
-                    File.WriteAllText(target, "// " + name + "\r\n", Encoding.UTF8);
-                    LoadDirectory(currentDirectory);
-                    OpenFileInEditor(target);
-                }
-                catch (Exception ex) { MessageBox.Show("Gagal membuat berkas: " + ex.Message); }
-            }
-        }
-
-        private void CreateNewFolderPrompt()
-        {
-            string name = PromptInput("Nama Folder Baru:", "project");
-            if (!string.IsNullOrEmpty(name))
-            {
-                string target = Path.Combine(currentDirectory, name);
-                try
-                {
-                    Directory.CreateDirectory(target);
-                    LoadDirectory(currentDirectory);
-                }
-                catch (Exception ex) { MessageBox.Show("Gagal membuat folder: " + ex.Message); }
-            }
-        }
-
-        private string PromptInput(string title, string defaultVal)
-        {
-            Form f = new Form
-            {
-                Text = title,
-                Size = new Size(380, 170),
-                StartPosition = FormStartPosition.CenterParent,
-                BackColor = Theme.CardBg,
-                ForeColor = Theme.Text,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false
-            };
-            TextBox txt = new TextBox { Text = defaultVal, Location = new Point(20, 30), Width = 320, BackColor = Theme.InputBg, ForeColor = Theme.Text, Font = Theme.FontRegular };
-            Button btnOk = new Button { Text = "OK", Location = new Point(240, 75), Size = new Size(100, 30), FlatStyle = FlatStyle.Flat, BackColor = Theme.Gold, ForeColor = Color.FromArgb(23, 21, 15), Font = Theme.FontBold };
-            btnOk.Click += (s, e) => { f.DialogResult = DialogResult.OK; f.Close(); };
-            f.Controls.Add(txt); f.Controls.Add(btnOk);
-            if (f.ShowDialog(this) == DialogResult.OK) return txt.Text.Trim();
-            return null;
-        }
-        #endregion
-
-        #region Pro Code Editor Operations
-        private void OpenFileInEditor(string filePath)
-        {
-            try
-            {
-                if (!File.Exists(filePath)) return;
-                activeEditingFile = filePath;
-                rtbCode.Text = File.ReadAllText(filePath, Encoding.UTF8);
-                lblEditorStatus.Text = Path.GetFileName(filePath) + " (" + (new FileInfo(filePath).Length / 1024.0).ToString("0.0") + " KB)";
-                SwitchView("editor");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Gagal membuka berkas: " + ex.Message);
-            }
-        }
-
-        private void SaveCurrentEditorFile()
-        {
-            if (string.IsNullOrEmpty(activeEditingFile))
-            {
-                MessageBox.Show("Tiada berkas aktif untuk disimpan!");
-                return;
-            }
-            try
-            {
-                File.WriteAllText(activeEditingFile, rtbCode.Text, Encoding.UTF8);
-                MessageBox.Show("✔ Berkas '" + Path.GetFileName(activeEditingFile) + "' berhasil disimpan!", "Simpan Berkas", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Gagal menyimpan: " + ex.Message);
-            }
-        }
-        #endregion
-
-        #region SSH Terminal Operations
-        private void PrintTermWelcome()
-        {
-            rtbTerminal.SelectionColor = Theme.Gold;
-            rtbTerminal.AppendText("★ MYSFTP SSH Terminal Console v1.4.0 (Termius Hybrid)\r\n");
-            rtbTerminal.SelectionColor = Theme.TextMuted;
-            rtbTerminal.AppendText("Connected to native session engine. Type commands or click quick shortcuts.\r\n\r\n");
-            PrintTermPrompt();
-        }
-
-        private void PrintTermPrompt()
-        {
-            rtbTerminal.SelectionColor = Theme.Green;
-            rtbTerminal.AppendText("mysftp@remote");
-            rtbTerminal.SelectionColor = Theme.TextMuted;
-            rtbTerminal.AppendText(":");
-            rtbTerminal.SelectionColor = Color.FromArgb(97, 175, 239);
-            rtbTerminal.AppendText("~");
-            rtbTerminal.SelectionColor = Theme.Text;
-            rtbTerminal.AppendText("$ ");
-            rtbTerminal.ScrollToCaret();
-        }
-
-        private void ExecuteTerminalInput()
-        {
-            string cmd = txtTermInput.Text.Trim();
-            if (string.IsNullOrEmpty(cmd)) return;
-            txtTermInput.Text = "";
-            RunTerminalCommand(cmd);
-        }
-
-        private void RunTerminalCommand(string cmd)
-        {
-            rtbTerminal.SelectionColor = Theme.GoldLight;
-            rtbTerminal.AppendText(cmd + "\r\n");
-
-            if (cmd == "clear")
-            {
-                rtbTerminal.Clear();
-                PrintTermPrompt();
-                return;
-            }
-
-            if (cmd == "ls -la" || cmd == "ls")
-            {
-                rtbTerminal.SelectionColor = Theme.Text;
-                rtbTerminal.AppendText("total 48\r\n" +
-                                       "drwxr-xr-x 5 root root 4096 Aug 25 02:30 .\r\n" +
-                                       "drwxr-xr-x 3 root root 4096 Aug 25 02:00 ..\r\n" +
-                                       "-rw-r--r-- 1 root root  889 Aug 25 02:20 package.json\r\n" +
-                                       "-rw-r--r-- 1 root root 8899 Aug 25 02:15 Icon.jpg\r\n" +
-                                       "-rwxr-xr-x 1 root root 1450 Aug 25 02:30 MYSFTP.exe\r\n" +
-                                       "-rw-r--r-- 1 root root 3874 Aug 25 02:00 README.md\r\n");
-            }
-            else if (cmd == "df -h")
-            {
-                rtbTerminal.SelectionColor = Theme.Text;
-                rtbTerminal.AppendText("Filesystem      Size  Used Avail Use% Mounted on\r\n" +
-                                       "/dev/vda1        60G   18G   42G  30% /\r\n" +
-                                       "tmpfs           2.0G     0  2.0G   0% /dev/shm\r\n");
-            }
-            else if (cmd == "free -m")
-            {
-                rtbTerminal.SelectionColor = Theme.Text;
-                rtbTerminal.AppendText("               total        used        free      shared  buff/cache   available\r\n" +
-                                       "Mem:            8192        2150        4820          45        1222        5810\r\n" +
-                                       "Swap:           2048           0        2048\r\n");
-            }
-            else if (cmd == "pm2 status" || cmd == "pm2 ls")
-            {
-                rtbTerminal.SelectionColor = Theme.Green;
-                rtbTerminal.AppendText("┌─────┬───────────┬─────────────┬─────────┬─────────┬──────────┬────────┬──────┬───────────┐\r\n" +
-                                       "│ id  │ name      │ namespace   │ version │ mode    │ pid      │ uptime │ ↺    │ status    │\r\n" +
-                                       "├─────┼───────────┼─────────────┼─────────┼─────────┼──────────┼────────┼──────┼───────────┤\r\n" +
-                                       "│ 11  │ botme     │ default     │ 1.0.0   │ fork    │ 28911    │ 14D    │ 0    │ online    │\r\n" +
-                                       "│ 7   │ botpub    │ default     │ 1.0.0   │ fork    │ 28912    │ 14D    │ 0    │ online    │\r\n" +
-                                       "│ 9   │ gopay     │ default     │ 2.1.0   │ fork    │ 28913    │ 14D    │ 0    │ online    │\r\n" +
-                                       "│ 5   │ kas       │ default     │ 1.0.0   │ fork    │ 28914    │ 14D    │ 0    │ online    │\r\n" +
-                                       "│ 3   │ zellanime │ default     │ 1.0.0   │ fork    │ 28915    │ 14D    │ 0    │ online    │\r\n" +
-                                       "└─────┴───────────┴─────────────┴─────────┴─────────┴──────────┴────────┴──────┴───────────┘\r\n");
-            }
-            else if (cmd == "uptime")
-            {
-                rtbTerminal.SelectionColor = Theme.Text;
-                rtbTerminal.AppendText(" 02:45:12 up 14 days,  6:20,  2 users,  load average: 0.12, 0.08, 0.05\r\n");
-            }
-            else
-            {
-                rtbTerminal.SelectionColor = Theme.Green;
-                rtbTerminal.AppendText("[MYSFTP Engine Response]: OK (Command executed: " + cmd + ")\r\n");
-            }
-
-            PrintTermPrompt();
-        }
-        #endregion
-
-        [STAThread]
-        static void Main()
-        {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
-        }
     }
 }

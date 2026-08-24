@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ MYSFTP (v1.4.0 — Luxury Dark Edition)
+# ⚡ MYSFTP (v1.5.0 — Luxury Glassmorphism Edition)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Terminal Hybrid**  
 *Crafted with Luxury Dark Gold Aesthetics by **ZellRayy***
