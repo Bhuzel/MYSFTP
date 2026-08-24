@@ -184,9 +184,7 @@ namespace MYSFTP
             string apPath = CreateAskPass();
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = FindSshExe();
-            // -tt forces a real remote PTY so the remote shell itself echoes input,
-            // shows the real prompt, and interactive tools (nano/htop/etc.) work properly.
-            psi.Arguments = "-tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p " + port + " " + user + "@" + host;
+            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p " + port + " " + user + "@" + host + " \"/bin/bash -i 2>&1 || sh -i 2>&1\"";
             psi.UseShellExecute = false;
             psi.RedirectStandardInput = true;
             psi.RedirectStandardOutput = true;
@@ -197,7 +195,6 @@ namespace MYSFTP
             psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
             psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
             psi.EnvironmentVariables["DISPLAY"] = ":0";
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
 
             lock (interactiveLock) { interactiveBuffer.Clear(); }
 
@@ -403,7 +400,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v198");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v199");
             }
             catch { }
 
@@ -624,7 +621,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v198\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v199\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -818,23 +815,27 @@ namespace MYSFTP
 
                     if (activeProtocol == "SFTP" && sshManager.IsConnected)
                     {
-                        // Real persistent PTY shell: write the line to stdin, the remote
-                        // shell echoes it and prints its own prompt/output which is picked
-                        // up by /api/terminal/poll. Auto-restart the shell if it died
-                        // (e.g. after an idle timeout) instead of silently failing.
-                        if (!sshManager.IsInteractiveAlive) sshManager.StartInteractiveShell();
-                        sshManager.SendInteractiveLine(cmd);
-                        SendJson(res, "{\"success\":true}");
+                        if (sshManager.IsInteractiveAlive)
+                        {
+                            sshManager.SendInteractiveLine(cmd);
+                            SendJson(res, "{\"success\":true}");
+                        }
+                        else
+                        {
+                            string output = sshManager.RunCommand(cmd, 15000);
+                            SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(output) + "\"}");
+                        }
                     }
                     else
                     {
-                        // Local command execution
                         ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + cmd)
                         {
                             RedirectStandardOutput = true,
                             RedirectStandardError = true,
                             UseShellExecute = false,
-                            CreateNoWindow = true
+                            CreateNoWindow = true,
+                            StandardOutputEncoding = Encoding.UTF8,
+                            StandardErrorEncoding = Encoding.UTF8
                         };
                         Process p = Process.Start(psi);
                         string outStr = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
@@ -1469,7 +1470,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.8 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.9 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -1582,7 +1583,7 @@ namespace MYSFTP
             <div class=""term-screen"" id=""tscreen""></div>
             <div class=""term-input-row"">
               <span class=""term-prompt"" id=""tprompt"">root@server:~#</span>
-              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah Linux di sini... (contoh: pm2 status, ls -la, htop)"" autocomplete=""off"">
+              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah Linux di sini... (contoh: pm2 status, ls -la, htop)"" autocomplete=""off"" onkeydown=""if(event.key==='Enter'){tExec();}else if(event.key==='ArrowUp'){event.preventDefault();tHistoryNav(-1);}else if(event.key==='ArrowDown'){event.preventDefault();tHistoryNav(1);}"">
               <button class=""btn btn-g btn-sm"" onclick=""tExec()"">Kirim</button>
             </div>
           </div>
@@ -1746,6 +1747,8 @@ namespace MYSFTP
       } else if (v === 'term') {
         cr.innerHTML = '<span class=""crumb"">💻 SSH Termius</span>';
         acts.innerHTML = '<button class=""btn btn-sm btn-break"" onclick=""tBreak()"">🛑 Ctrl+C</button>';
+        startTermPoll();
+        setTimeout(function(){ var el = document.getElementById('tinp'); if(el) el.focus(); }, 60);
       }
     }
 
@@ -2232,10 +2235,17 @@ namespace MYSFTP
       termHistory.push(cmd);
       termHistPos = termHistory.length;
 
+      var promptTxt = (document.getElementById('tprompt').textContent || 'root@server:~#') + ' ';
+      tPrint('\r\n\x1b[1;32m' + promptTxt + '\x1b[0m\x1b[1;37m' + cmd + '\x1b[0m\r\n');
+
       fetch('/api/terminal/exec', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
+        headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify({ command: cmd })
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d && d.output) {
+          tPrint(d.output + '\r\n');
+        }
       }).catch(function(err) {
         tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
       });

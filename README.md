@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ MYSFTP (v1.9.8 — Luxury Glassmorphism Edition)
+# ⚡ MYSFTP (v1.9.9 — Luxury Glassmorphism Edition)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
 *Engineered for Public Release with Luxury Dark Gold Aesthetics & High-Performance Core by **ZellRayy***
@@ -91,5 +91,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v1.9.8 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v1.9.9 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>
