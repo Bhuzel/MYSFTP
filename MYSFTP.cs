@@ -15,6 +15,7 @@ namespace MYSFTP
         private Process sshProcess;
         private StringBuilder outputBuffer = new StringBuilder();
         private string askpassPath;
+        private string muxSocket;
         private string host;
         private int port;
         private string user;
@@ -22,12 +23,17 @@ namespace MYSFTP
         private bool connected;
         private object lockObj = new object();
 
+        [DllImport("shell32.dll", SetLastError = true)]
+        public static extern void SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
+
         public bool IsConnected { get { return connected && sshProcess != null && !sshProcess.HasExited; } }
 
         public void Connect(string h, int p, string u, string pw)
         {
             Disconnect();
             host = h; port = p; user = u; password = pw;
+
+            muxSocket = Path.Combine(Path.GetTempPath(), "mysftp_mux_" + Guid.NewGuid().ToString("N").Substring(0, 8));
 
             // Create askpass helper script
             askpassPath = Path.Combine(Path.GetTempPath(), "mysftp_ap_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
@@ -38,15 +44,19 @@ namespace MYSFTP
 
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = FindSshExe();
-            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ServerAliveInterval=30 -p " + port + " " + user + "@" + host;
+            // Connect with PTY simulation and terminal environment
+            psi.Arguments = "-tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ServerAliveInterval=15 -p " + port + " " + user + "@" + host;
             psi.UseShellExecute = false;
             psi.RedirectStandardInput = true;
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
             psi.CreateNoWindow = true;
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
             psi.EnvironmentVariables["SSH_ASKPASS"] = askpassPath;
             psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
             psi.EnvironmentVariables["DISPLAY"] = ":0";
+            psi.EnvironmentVariables["TERM"] = "xterm-256color";
 
             lock (lockObj) { outputBuffer.Clear(); }
             sshProcess = Process.Start(psi);
@@ -89,6 +99,20 @@ namespace MYSFTP
             }
         }
 
+        public void SendCtrlC()
+        {
+            if (IsConnected)
+            {
+                try
+                {
+                    // Send ASCII 3 (ETX / Ctrl+C)
+                    sshProcess.StandardInput.Write('\x03');
+                    sshProcess.StandardInput.Flush();
+                }
+                catch { }
+            }
+        }
+
         public string GetOutput()
         {
             lock (lockObj)
@@ -105,7 +129,7 @@ namespace MYSFTP
             if (sshProcess != null && !sshProcess.HasExited)
             {
                 try { sshProcess.StandardInput.WriteLine("exit"); } catch { }
-                Thread.Sleep(200);
+                Thread.Sleep(150);
                 try { if (!sshProcess.HasExited) sshProcess.Kill(); } catch { }
             }
             sshProcess = null;
@@ -121,10 +145,13 @@ namespace MYSFTP
             askpassPath = null;
         }
 
-        // Run a one-shot SSH command and return output
-        public string RunOneShot(string command)
+        // Run a fast one-shot SSH command
+        public string RunCommand(string command, int timeoutMs = 8000)
         {
-            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_os_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
+            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(password))
+                return "Not connected";
+
+            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
             string escapedPw = password.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
                                        .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
                                        .Replace("\"", "^\"");
@@ -134,11 +161,13 @@ namespace MYSFTP
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -p " + port + " " + user + "@" + host + " " + command;
                 psi.UseShellExecute = false;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.CreateNoWindow = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.StandardErrorEncoding = Encoding.UTF8;
                 psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
                 psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
                 psi.EnvironmentVariables["DISPLAY"] = ":0";
@@ -146,7 +175,7 @@ namespace MYSFTP
                 Process p = Process.Start(psi);
                 string stdout = p.StandardOutput.ReadToEnd();
                 string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(15000);
+                p.WaitForExit(timeoutMs);
                 if (!p.HasExited) try { p.Kill(); } catch { }
 
                 return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
@@ -157,10 +186,12 @@ namespace MYSFTP
             }
         }
 
-        // Run a one-shot command and pipe content to stdin
-        public string RunOneShotWithStdin(string command, string stdinContent)
+        public string RunCommandWithStdin(string command, string stdinContent, int timeoutMs = 12000)
         {
-            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_ws_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
+            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(password))
+                return "Not connected";
+
+            string apPath = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
             string escapedPw = password.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
                                        .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
                                        .Replace("\"", "^\"");
@@ -170,22 +201,27 @@ namespace MYSFTP
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -p " + port + " " + user + "@" + host + " " + command;
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.CreateNoWindow = true;
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.StandardErrorEncoding = Encoding.UTF8;
                 psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
                 psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
                 psi.EnvironmentVariables["DISPLAY"] = ":0";
 
                 Process p = Process.Start(psi);
-                p.StandardInput.Write(stdinContent);
-                p.StandardInput.Close();
+                using (StreamWriter sw = new StreamWriter(p.StandardInput.BaseStream, Encoding.UTF8))
+                {
+                    sw.Write(stdinContent);
+                    sw.Flush();
+                }
                 string stdout = p.StandardOutput.ReadToEnd();
                 string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(15000);
+                p.WaitForExit(timeoutMs);
                 if (!p.HasExited) try { p.Kill(); } catch { }
 
                 return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
@@ -207,7 +243,7 @@ namespace MYSFTP
             {
                 if (File.Exists(p)) return p;
             }
-            return "ssh.exe"; // fall back to PATH
+            return "ssh.exe";
         }
     }
 
@@ -220,21 +256,22 @@ namespace MYSFTP
         private static bool isRunning = true;
         private static Process browserProcess;
         private static SshManager sshManager = new SshManager();
-        // Store active connection info for remote operations
         private static string activeHost;
         private static int activePort;
         private static string activeUser;
         private static string activePassword;
         private static string activeProtocol;
         private static string activeName;
-        private static string activeRemotePath = "/";
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [STAThread]
         static void Main(string[] args)
         {
+            try
+            {
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.App.v170");
+            }
+            catch { }
+
             dataDir = AppDomain.CurrentDomain.BaseDirectory;
             profilesFile = Path.Combine(dataDir, "connections.json");
 
@@ -251,7 +288,7 @@ namespace MYSFTP
             serverThread.IsBackground = true;
             serverThread.Start();
 
-            LaunchAppWindow("http://127.0.0.1:" + port + "/");
+            LaunchNativeAppWindow("http://127.0.0.1:" + port + "/");
 
             if (browserProcess != null)
                 browserProcess.WaitForExit();
@@ -262,7 +299,7 @@ namespace MYSFTP
             try { listener.Stop(); } catch { }
         }
 
-        private static void LaunchAppWindow(string url)
+        private static void LaunchNativeAppWindow(string url)
         {
             string edgePath = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
             if (!File.Exists(edgePath)) edgePath = @"C:\Program Files\Microsoft\Edge\Application\msedge.exe";
@@ -270,13 +307,13 @@ namespace MYSFTP
             if (!File.Exists(chromePath)) chromePath = @"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe";
 
             string browser = File.Exists(edgePath) ? edgePath : (File.Exists(chromePath) ? chromePath : null);
-            string userProfile = Path.Combine(Path.GetTempPath(), "MYSFTP_App_" + port);
+            string userProfile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MYSFTP_Client_Data");
 
             if (browser != null)
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --window-size=1300,850 --user-data-dir=\"" + userProfile + "\"";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client\" --window-size=1320,860 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run";
                 psi.UseShellExecute = false;
                 browserProcess = Process.Start(psi);
             }
@@ -324,6 +361,21 @@ namespace MYSFTP
                     res.ContentLength64 = buf.Length;
                     res.OutputStream.Write(buf, 0, buf.Length);
                 }
+                else if (path == "/icon.jpg" || path == "/favicon.ico")
+                {
+                    string iconFile = Path.Combine(dataDir, "Icon.jpg");
+                    if (File.Exists(iconFile))
+                    {
+                        byte[] iconBuf = File.ReadAllBytes(iconFile);
+                        res.ContentType = "image/jpeg";
+                        res.ContentLength64 = iconBuf.Length;
+                        res.OutputStream.Write(iconBuf, 0, iconBuf.Length);
+                    }
+                    else
+                    {
+                        res.StatusCode = 404;
+                    }
+                }
                 else if (path == "/api/profiles" && req.HttpMethod == "GET")
                 {
                     string json = "[]";
@@ -347,15 +399,12 @@ namespace MYSFTP
                     activePassword = ExtractVal(body, "password");
                     activeProtocol = ExtractVal(body, "protocol");
                     activeName = ExtractVal(body, "name");
-                    activeRemotePath = "/";
 
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost) && !string.IsNullOrEmpty(activePassword))
                     {
-                        // Start interactive SSH session for terminal
                         sshManager.Connect(activeHost, activePort, activeUser, activePassword);
-                        Thread.Sleep(1500); // Wait for SSH handshake
+                        Thread.Sleep(1200);
 
-                        // Test connection by listing root
                         string testOut = sshManager.GetOutput();
                         bool hasError = testOut.Contains("Permission denied") || testOut.Contains("Connection refused") || testOut.Contains("No route to host");
 
@@ -401,12 +450,17 @@ namespace MYSFTP
                     sshManager.SendInput(input + "\n");
                     SendJson(res, "{\"success\":true}");
                 }
+                else if (path == "/api/terminal/break" && req.HttpMethod == "POST")
+                {
+                    sshManager.SendCtrlC();
+                    SendJson(res, "{\"success\":true}");
+                }
                 else if (path == "/api/fs/list")
                 {
                     string dir = req.QueryString["path"] ?? "/";
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
                     {
-                        SendJson(res, ListRemoteDir(dir));
+                        SendJson(res, ListRemoteDirFast(dir));
                     }
                     else
                     {
@@ -478,7 +532,7 @@ namespace MYSFTP
                     sshManager.Disconnect();
                     SendJson(res, "{\"success\":true}");
                     isRunning = false;
-                    new Thread(() => { Thread.Sleep(500); Environment.Exit(0); }).Start();
+                    new Thread(() => { Thread.Sleep(300); Environment.Exit(0); }).Start();
                 }
                 else
                 {
@@ -497,16 +551,21 @@ namespace MYSFTP
             }
         }
 
-        // ── Remote SFTP operations via SSH ──
-
-        private static string ListRemoteDir(string dir)
+        // Fast remote SFTP listing
+        private static string ListRemoteDirFast(string dir)
         {
             try
             {
                 if (string.IsNullOrEmpty(dir) || dir == ".") dir = "/root";
-                string raw = sshManager.RunOneShot("\"ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"");
-                if (raw.Contains("No such file") || raw.Contains("Permission denied"))
+                dir = dir.TrimEnd('/');
+                if (string.IsNullOrEmpty(dir)) dir = "/";
+
+                // Ultra fast parser: ls -la with ISO dates
+                string raw = sshManager.RunCommand("\"ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"", 6000);
+                if (raw.Contains("No such file") || raw.Contains("cannot access") || raw.Contains("Permission denied"))
+                {
                     return "{\"success\":false,\"error\":\"" + EscapeJson(raw.Trim()) + "\"}";
+                }
 
                 List<string> items = new List<string>();
                 string[] lines = raw.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -515,22 +574,18 @@ namespace MYSFTP
                     string line = rawLine.Trim();
                     if (line.StartsWith("total ") || line.Length < 10) continue;
 
-                    // Parse: drwxr-xr-x 2 root root 4096 2026-08-25 03:00 dirname
                     char firstChar = line[0];
                     bool isDir = firstChar == 'd' || firstChar == 'l';
 
-                    // Split by whitespace
                     string[] parts = System.Text.RegularExpressions.Regex.Split(line, @"\s+");
                     if (parts.Length < 8) continue;
 
                     string name = "";
-                    // Name is everything after the date+time (index 5=date, 6=time, 7+ = name)
                     for (int i = 7; i < parts.Length; i++)
                     {
                         if (i > 7) name += " ";
                         name += parts[i];
                     }
-                    // Strip symlink target
                     int arrowIdx = name.IndexOf(" -> ");
                     if (arrowIdx >= 0) name = name.Substring(0, arrowIdx);
 
@@ -538,7 +593,7 @@ namespace MYSFTP
 
                     string size = parts[4];
                     string modified = parts[5] + " " + parts[6];
-                    string fullPath = dir.TrimEnd('/') + "/" + name;
+                    string fullPath = (dir == "/" ? "" : dir) + "/" + name;
 
                     items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(fullPath) + "\",\"isDirectory\":" + (isDir ? "true" : "false") + ",\"size\":" + size + ",\"modified\":\"" + EscapeJson(modified) + "\"}");
                 }
@@ -558,7 +613,7 @@ namespace MYSFTP
         {
             try
             {
-                string content = sshManager.RunOneShot("\"cat " + EscapeShell(path) + " 2>&1\"");
+                string content = sshManager.RunCommand("\"cat " + EscapeShell(path) + " 2>&1\"", 8000);
                 return "{\"success\":true,\"path\":\"" + EscapeJson(path) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
             }
             catch (Exception ex)
@@ -571,7 +626,7 @@ namespace MYSFTP
         {
             try
             {
-                sshManager.RunOneShotWithStdin("\"cat > " + EscapeShell(path) + "\"", content);
+                sshManager.RunCommandWithStdin("\"cat > " + EscapeShell(path) + "\"", content, 10000);
                 return "{\"success\":true,\"message\":\"Berkas berhasil disimpan ke server!\"}";
             }
             catch (Exception ex)
@@ -584,7 +639,7 @@ namespace MYSFTP
         {
             try
             {
-                sshManager.RunOneShot("\"rm -rf " + EscapeShell(path) + " 2>&1\"");
+                sshManager.RunCommand("\"rm -rf " + EscapeShell(path) + " 2>&1\"", 6000);
                 return "{\"success\":true}";
             }
             catch (Exception ex)
@@ -598,9 +653,9 @@ namespace MYSFTP
             try
             {
                 if (type == "folder")
-                    sshManager.RunOneShot("\"mkdir -p " + EscapeShell(path) + " 2>&1\"");
+                    sshManager.RunCommand("\"mkdir -p " + EscapeShell(path) + " 2>&1\"", 5000);
                 else
-                    sshManager.RunOneShot("\"touch " + EscapeShell(path) + " 2>&1\"");
+                    sshManager.RunCommand("\"touch " + EscapeShell(path) + " 2>&1\"", 5000);
                 return "{\"success\":true}";
             }
             catch (Exception ex)
@@ -608,8 +663,6 @@ namespace MYSFTP
                 return "{\"success\":false,\"error\":\"" + EscapeJson(ex.Message) + "\"}";
             }
         }
-
-        // ── Local file operations ──
 
         private static string ListLocalDir(string p)
         {
@@ -715,8 +768,6 @@ namespace MYSFTP
             }
         }
 
-        // ── Utilities ──
-
         private static string PingHost(string host, int p)
         {
             Stopwatch sw = Stopwatch.StartNew();
@@ -725,7 +776,7 @@ namespace MYSFTP
                 using (TcpClient client = new TcpClient())
                 {
                     var result = client.BeginConnect(host, p, null, null);
-                    var success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(3));
+                    var success = result.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(2));
                     sw.Stop();
                     if (success) return "{\"online\":true,\"latency\":" + sw.ElapsedMilliseconds + "}";
                 }
@@ -757,7 +808,6 @@ namespace MYSFTP
             if (idx >= 0)
             {
                 int start = idx + search.Length;
-                // Handle escaped quotes
                 StringBuilder sb = new StringBuilder();
                 for (int i = start; i < json.Length; i++)
                 {
@@ -782,7 +832,6 @@ namespace MYSFTP
                 }
                 return sb.ToString();
             }
-            // Try numeric/boolean
             search = "\"" + key + "\":";
             idx = json.IndexOf(search);
             if (idx >= 0)
@@ -813,150 +862,152 @@ namespace MYSFTP
 <head>
   <meta charset=""UTF-8"">
   <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-  <title>MYSFTP v1.6.0 — Desktop Luxury Client</title>
+  <title>MYSFTP v1.7.0 — Luxury SFTP & SSH Suite</title>
+  <link rel=""icon"" type=""image/jpeg"" href=""/icon.jpg"">
   <link rel=""preconnect"" href=""https://fonts.googleapis.com"">
   <link rel=""preconnect"" href=""https://fonts.gstatic.com"" crossorigin>
-  <link href=""https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap"" rel=""stylesheet"">
+  <link href=""https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800;900&display=swap"" rel=""stylesheet"">
   <style>
     :root {
-      --bg-base: #08090b;
-      --bg-surface: #0f1014;
-      --bg-card: #14151a;
-      --bg-card-hover: #1b1c22;
-      --bg-input: #0b0c0f;
-      --border: rgba(255,255,255,0.06);
-      --border-gold: rgba(205,189,148,0.3);
+      --bg-base: #07080a;
+      --bg-surface: #0e0f14;
+      --bg-card: #13151b;
+      --bg-card-hover: #1a1c24;
+      --bg-input: #090a0d;
+      --border: rgba(255,255,255,0.07);
+      --border-gold: rgba(205,189,148,0.35);
       --gold: #cdbd94;
-      --gold-light: #e6dcbe;
-      --gold-glow: rgba(205,189,148,0.15);
-      --text: #eae6da;
-      --text-dim: #7e7b73;
-      --green: #6fcf7f;
+      --gold-light: #f0e6cf;
+      --gold-glow: rgba(205,189,148,0.2);
+      --text: #eae6db;
+      --text-dim: #7f7c72;
+      --green: #73d285;
       --red: #e06c75;
-      --blue: #61afef;
+      --blue: #6ab0f3;
+      --yellow: #e5c07b;
       --cyan: #56c8d8;
-      --r-sm: 8px; --r-md: 12px; --r-lg: 18px;
+      --purple: #c678dd;
+      --r-sm: 8px; --r-md: 14px; --r-lg: 20px;
     }
-    *{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased;}
-    body,html{background:var(--bg-base);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:13.5px;height:100%;overflow:hidden;}
-    ::selection{background:var(--gold);color:#111;}
-    ::-webkit-scrollbar{width:6px;height:6px;}
-    ::-webkit-scrollbar-track{background:transparent;}
-    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px;}
-    ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.2);}
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+    body, html { background:var(--bg-base); color:var(--text); font-family:'Inter',system-ui,sans-serif; font-size:13.5px; height:100%; overflow:hidden; }
+    ::selection { background:var(--gold); color:#111; }
+    ::-webkit-scrollbar { width:6px; height:6px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.12); border-radius:3px; }
+    ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.25); }
 
-    #root{display:flex;height:100vh;width:100vw;}
+    #root { display:flex; height:100vh; width:100vw; background:radial-gradient(circle at 85% 15%, rgba(205,189,148,0.04), transparent 50%), var(--bg-base); }
 
     /* ── Sidebar ── */
-    .sb{width:220px;background:var(--bg-surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;}
-    .sb-brand{height:56px;padding:0 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);}
-    .sb-logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#cdbd94,#96865c);color:#111;display:flex;align-items:center;justify-content:center;font-family:'Outfit';font-weight:800;font-size:14px;}
-    .sb-info{display:flex;flex-direction:column;}
-    .sb-name{font-family:'Outfit';font-weight:800;font-size:14px;color:var(--gold-light);letter-spacing:.3px;}
-    .sb-ver{font-size:9px;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
-    .sb-nav{flex:1;padding:12px 8px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;}
-    .sb-cat{font-size:9.5px;font-weight:700;text-transform:uppercase;color:var(--text-dim);padding:12px 10px 4px;letter-spacing:.8px;}
-    .sb-btn{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r-sm);color:var(--text-dim);cursor:pointer;font-weight:600;font-size:12.5px;transition:all .15s;border:1px solid transparent;}
-    .sb-btn:hover{background:var(--bg-card);color:var(--text);}
-    .sb-btn.on{background:rgba(205,189,148,0.1);color:var(--gold-light);border-color:var(--border-gold);}
-    .sb-btn .ic{font-size:15px;width:20px;text-align:center;}
-    .sb-foot{padding:12px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;}
-    .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite;}
-    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}
-    .sb-status{font-size:11px;font-weight:600;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .sb { width:228px; background:rgba(14,15,20,0.95); backdrop-filter:blur(24px); border-right:1px solid var(--border); display:flex; flex-direction:column; flex-shrink:0; z-index:10; }
+    .sb-brand { height:60px; padding:0 18px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
+    .sb-logo { width:34px; height:34px; border-radius:10px; background:linear-gradient(135deg,#cdbd94,#96865c); color:#111; display:flex; align-items:center; justify-content:center; font-family:'Outfit'; font-weight:900; font-size:16px; box-shadow:0 4px 12px rgba(205,189,148,0.3); }
+    .sb-info { display:flex; flex-direction:column; }
+    .sb-name { font-family:'Outfit'; font-weight:800; font-size:15px; color:var(--gold-light); letter-spacing:.5px; }
+    .sb-ver { font-size:9px; color:var(--text-dim); font-weight:700; text-transform:uppercase; letter-spacing:.6px; }
+    .sb-nav { flex:1; padding:14px 10px; display:flex; flex-direction:column; gap:3px; overflow-y:auto; }
+    .sb-cat { font-size:9.5px; font-weight:800; text-transform:uppercase; color:var(--text-dim); padding:12px 10px 4px; letter-spacing:.9px; }
+    .sb-btn { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--r-sm); color:var(--text-dim); cursor:pointer; font-weight:600; font-size:12.5px; transition:all .15s; border:1px solid transparent; }
+    .sb-btn:hover { background:var(--bg-card); color:var(--text); }
+    .sb-btn.on { background:rgba(205,189,148,0.12); color:var(--gold-light); border-color:var(--border-gold); font-weight:700; }
+    .sb-btn .ic { font-size:16px; width:20px; text-align:center; }
+    .sb-foot { padding:14px 16px; border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+    .pulse { width:8px; height:8px; border-radius:50%; background:var(--red); box-shadow:0 0 8px var(--red); transition:all .3s; }
+    .pulse.live { background:var(--green); box-shadow:0 0 8px var(--green); animation:pGlow 2s infinite; }
+    @keyframes pGlow { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+    .sb-status { font-size:11.5px; font-weight:600; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-    /* ── Main ── */
-    .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;}
-    .topbar{height:48px;background:var(--bg-surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 20px;flex-shrink:0;}
-    .crumbs{display:flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:12px;color:var(--gold-light);font-weight:500;}
-    .crumb{background:var(--bg-card);border:1px solid var(--border);padding:3px 8px;border-radius:5px;cursor:pointer;transition:border-color .15s;}
-    .crumb:hover{border-color:var(--gold);}
+    /* ── Main Area ── */
+    .main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+    .conn-bar { height:36px; background:rgba(115,210,133,0.08); border-bottom:1px solid rgba(115,210,133,0.2); display:none; align-items:center; justify-content:space-between; padding:0 22px; font-size:12px; font-weight:600; color:var(--green); flex-shrink:0; }
+    .conn-bar.on { display:flex; }
+    .topbar { height:52px; background:var(--bg-surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 22px; flex-shrink:0; }
+    .crumbs { display:flex; align-items:center; gap:8px; font-family:'JetBrains Mono'; font-size:12.5px; color:var(--gold-light); font-weight:500; }
+    .crumb { background:var(--bg-card); border:1px solid var(--border); padding:4px 10px; border-radius:6px; cursor:pointer; transition:border-color .15s; }
+    .crumb:hover { border-color:var(--gold); }
 
-    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;font-size:12px;font-weight:700;border-radius:var(--r-sm);border:none;cursor:pointer;font-family:'Inter';transition:all .15s;}
-    .btn-g{background:linear-gradient(135deg,#cdbd94,#b5a477);color:#111;box-shadow:0 2px 10px rgba(205,189,148,.2);}
-    .btn-g:hover{filter:brightness(1.12);transform:translateY(-1px);}
-    .btn-d{background:var(--bg-card);color:var(--text);border:1px solid var(--border);}
-    .btn-d:hover{background:var(--bg-card-hover);border-color:rgba(255,255,255,.15);}
-    .btn-danger{background:rgba(224,108,117,.15);color:var(--red);border:1px solid rgba(224,108,117,.25);}
-    .btn-danger:hover{background:rgba(224,108,117,.25);}
-    .btn-sm{padding:5px 10px;font-size:11px;}
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:7px 15px; font-size:12.5px; font-weight:700; border-radius:var(--r-sm); border:none; cursor:pointer; font-family:'Inter'; transition:all .18s; }
+    .btn-g { background:linear-gradient(135deg,#cdbd94,#b5a477); color:#111; box-shadow:0 3px 12px rgba(205,189,148,.25); }
+    .btn-g:hover { filter:brightness(1.1); transform:translateY(-1px); }
+    .btn-d { background:var(--bg-card); color:var(--text); border:1px solid var(--border); }
+    .btn-d:hover { background:var(--bg-card-hover); border-color:rgba(255,255,255,.18); }
+    .btn-danger { background:rgba(224,108,117,0.12); color:var(--red); border:1px solid rgba(224,108,117,0.25); }
+    .btn-danger:hover { background:rgba(224,108,117,0.22); }
+    .btn-break { background:rgba(224,108,117,0.18); color:#f28b93; border:1px solid var(--red); font-family:'JetBrains Mono'; font-weight:700; }
+    .btn-break:hover { background:var(--red); color:#fff; }
+    .btn-sm { padding:5px 11px; font-size:11.5px; }
 
     /* ── Pages ── */
-    .stage{flex:1;position:relative;overflow:hidden;}
-    .page{position:absolute;inset:0;display:none;flex-direction:column;overflow-y:auto;padding:20px;}
-    .page.on{display:flex;}
+    .stage { flex:1; position:relative; overflow:hidden; }
+    .page { position:absolute; inset:0; display:none; flex-direction:column; overflow-y:auto; padding:22px; }
+    .page.on { display:flex; }
 
-    /* ── Connection page ── */
-    .sec-title{font-family:'Outfit';font-size:20px;font-weight:800;color:var(--text);margin-bottom:3px;}
-    .sec-sub{font-size:12.5px;color:var(--text-dim);margin-bottom:16px;}
-    .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;}
-    .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r-md);padding:16px;display:flex;flex-direction:column;gap:10px;transition:all .2s;position:relative;}
-    .card:hover{border-color:var(--border-gold);box-shadow:0 8px 24px rgba(0,0,0,.3);transform:translateY(-2px);}
-    .card-row{display:flex;justify-content:space-between;align-items:center;}
-    .tag{font-size:10px;font-weight:800;font-family:'JetBrains Mono';padding:2px 7px;border-radius:5px;background:rgba(205,189,148,.1);color:var(--gold-light);border:1px solid var(--border-gold);}
-    .card-name{font-family:'Outfit';font-size:16px;font-weight:700;color:var(--gold-light);}
-    .card-ep{font-family:'JetBrains Mono';font-size:11.5px;color:var(--text-dim);}
-    .card-acts{display:flex;gap:8px;margin-top:4px;padding-top:10px;border-top:1px solid var(--border);}
-    .card-ping{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text-dim);margin-top:2px;}
+    /* ── Connections Page ── */
+    .sec-title { font-family:'Outfit'; font-size:22px; font-weight:800; color:var(--text); margin-bottom:4px; }
+    .sec-sub { font-size:13px; color:var(--text-dim); margin-bottom:18px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(310px,1fr)); gap:16px; }
+    .card { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); padding:18px; display:flex; flex-direction:column; gap:11px; transition:all .2s; position:relative; }
+    .card:hover { border-color:var(--border-gold); box-shadow:0 10px 28px rgba(0,0,0,.4); transform:translateY(-2px); }
+    .card-row { display:flex; justify-content:space-between; align-items:center; }
+    .tag { font-size:10.5px; font-weight:800; font-family:'JetBrains Mono'; padding:2px 8px; border-radius:6px; background:rgba(205,189,148,.12); color:var(--gold-light); border:1px solid var(--border-gold); }
+    .card-name { font-family:'Outfit'; font-size:17px; font-weight:700; color:var(--gold-light); }
+    .card-ep { font-family:'JetBrains Mono'; font-size:12px; color:var(--text-dim); }
+    .card-acts { display:flex; gap:8px; margin-top:4px; padding-top:12px; border-top:1px solid var(--border); }
+    .card-ping { font-family:'JetBrains Mono'; font-size:11px; color:var(--text-dim); }
 
-    /* ── Empty state ── */
-    .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:12px;opacity:.7;padding:40px 0;}
-    .empty-icon{font-size:48px;opacity:.5;}
-    .empty-text{font-size:14px;color:var(--text-dim);text-align:center;max-width:320px;}
+    .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:14px; opacity:.75; padding:60px 0; }
+    .empty-icon { font-size:52px; opacity:.6; }
+    .empty-text { font-size:14px; color:var(--text-dim); text-align:center; max-width:340px; line-height:1.6; }
 
-    /* ── File table ── */
-    .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;background:var(--bg-card);padding:8px 12px;border-radius:var(--r-sm);border:1px solid var(--border);}
-    .ftbl{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:var(--r-md);overflow:hidden;border:1px solid var(--border);}
-    .ftbl th{text-align:left;padding:10px 14px;font-size:10.5px;font-weight:700;text-transform:uppercase;color:var(--text-dim);border-bottom:1px solid var(--border);background:rgba(0,0,0,.2);}
-    .ftbl td{padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.02);font-size:12.5px;}
-    .frow{cursor:pointer;transition:background .12s;}
-    .frow:hover{background:var(--bg-card-hover);}
-    .fname{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text);}
-    .fname.dir{color:var(--gold-light);}
-    .fmeta{font-family:'JetBrains Mono';color:var(--text-dim);font-size:11.5px;}
-    .frow .del-btn{opacity:0;transition:opacity .15s;}
-    .frow:hover .del-btn{opacity:1;}
+    /* ── File Explorer ── */
+    .toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; background:var(--bg-card); padding:8px 14px; border-radius:var(--r-sm); border:1px solid var(--border); }
+    .ftbl { width:100%; border-collapse:collapse; background:var(--bg-card); border-radius:var(--r-md); overflow:hidden; border:1px solid var(--border); }
+    .ftbl th { text-align:left; padding:11px 16px; font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-dim); border-bottom:1px solid var(--border); background:rgba(0,0,0,.25); }
+    .ftbl td { padding:11px 16px; border-bottom:1px solid rgba(255,255,255,.025); font-size:13px; }
+    .frow { cursor:pointer; transition:background .12s; }
+    .frow:hover { background:var(--bg-card-hover); }
+    .fname { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--text); }
+    .fname.dir { color:var(--gold-light); }
+    .fmeta { font-family:'JetBrains Mono'; color:var(--text-dim); font-size:12px; }
+    .frow .del-btn { opacity:0; transition:opacity .15s; }
+    .frow:hover .del-btn { opacity:1; }
 
     /* ── Editor ── */
-    .editor-wrap{flex:1;display:flex;flex-direction:column;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;}
-    .editor-bar{height:40px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 12px;flex-shrink:0;}
-    .editor-tab{padding:4px 10px;background:var(--bg-input);border:1px solid var(--border-gold);border-radius:5px;color:var(--gold-light);font-weight:600;font-size:11.5px;font-family:'JetBrains Mono';}
-    .code-area{flex:1;width:100%;background:transparent;color:#d8d4c6;caret-color:var(--gold);font-family:'JetBrains Mono';font-size:13px;line-height:1.65;padding:14px;border:none;outline:none;resize:none;white-space:pre;tab-size:2;}
+    .editor-wrap { flex:1; display:flex; flex-direction:column; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; }
+    .editor-bar { height:44px; background:var(--bg-card); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 14px; flex-shrink:0; }
+    .editor-tab { padding:5px 12px; background:var(--bg-input); border:1px solid var(--border-gold); border-radius:6px; color:var(--gold-light); font-weight:600; font-size:12px; font-family:'JetBrains Mono'; }
+    .code-area { flex:1; width:100%; background:transparent; color:#eae6db; caret-color:var(--gold); font-family:'JetBrains Mono',monospace; font-size:13px; line-height:1.65; padding:16px; border:none; outline:none; resize:none; white-space:pre; tab-size:2; }
 
-    /* ── Terminal ── */
-    .term-wrap{flex:1;display:flex;flex-direction:column;background:#020203;border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;}
-    .term-bar{height:38px;background:var(--bg-card);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 12px;flex-shrink:0;}
-    .term-title{font-family:'JetBrains Mono';font-weight:700;font-size:12px;color:var(--gold-light);}
-    .chips{display:flex;gap:4px;overflow-x:auto;flex-shrink:0;}
-    .chip{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:5px;padding:2px 7px;font-family:'JetBrains Mono';font-size:10.5px;color:var(--gold-light);cursor:pointer;transition:all .12s;white-space:nowrap;}
-    .chip:hover{background:var(--gold);color:#111;}
-    .term-screen{flex:1;padding:14px;font-family:'JetBrains Mono';font-size:12.5px;color:#c8c4b8;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.55;user-select:text;}
-    .term-input-row{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-card);border-top:1px solid var(--border);flex-shrink:0;}
-    .term-prompt{font-family:'JetBrains Mono';font-weight:700;color:var(--green);font-size:12px;white-space:nowrap;}
-    .term-inp{flex:1;background:transparent;border:none;outline:none;font-family:'JetBrains Mono';font-size:12.5px;color:var(--gold-light);}
+    /* ── Termius Terminal ── */
+    .term-wrap { flex:1; display:flex; flex-direction:column; background:#07080c; border:1px solid var(--border-gold); border-radius:var(--r-md); overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,0.5); }
+    .term-bar { height:44px; background:#0f1118; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 14px; flex-shrink:0; }
+    .term-title { font-family:'JetBrains Mono',monospace; font-weight:700; font-size:12.5px; color:var(--gold-light); display:flex; align-items:center; gap:8px; }
+    .chips { display:flex; gap:6px; overflow-x:auto; flex-shrink:0; }
+    .chip { background:rgba(255,255,255,.06); border:1px solid var(--border); border-radius:6px; padding:4px 9px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--gold-light); cursor:pointer; transition:all .14s; white-space:nowrap; }
+    .chip:hover { background:var(--gold); color:#111; font-weight:700; }
+    .term-screen { flex:1; padding:16px; font-family:'JetBrains Mono','Cascadia Code',monospace; font-size:12.5px; line-height:1.45; letter-spacing:0px; color:#d6d3c9; overflow-y:auto; white-space:pre-wrap; word-break:break-all; user-select:text; background:#07080c; }
+    .term-input-row { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#0f1118; border-top:1px solid var(--border); flex-shrink:0; }
+    .term-prompt { font-family:'JetBrains Mono',monospace; font-weight:700; color:var(--green); font-size:12.5px; white-space:nowrap; }
+    .term-inp { flex:1; background:transparent; border:none; outline:none; font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--gold-light); caret-color:var(--gold); }
 
     /* ── Modal ── */
-    .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);display:none;align-items:center;justify-content:center;z-index:999;}
-    .overlay.on{display:flex;}
-    .modal{background:var(--bg-card);border:1px solid var(--border-gold);border-radius:var(--r-lg);width:100%;max-width:460px;box-shadow:0 20px 50px rgba(0,0,0,.5);overflow:hidden;}
-    .modal-hd{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;}
-    .modal-hd h3{font-family:'Outfit';font-size:17px;font-weight:800;color:var(--gold-light);}
-    .modal-bd{padding:18px 20px;display:flex;flex-direction:column;gap:12px;}
-    .lbl{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;}
-    .inp{width:100%;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--r-sm);padding:9px 11px;color:var(--text);font-size:13px;outline:none;transition:border .2s;font-family:inherit;}
-    .inp:focus{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold-glow);}
-    select.inp{appearance:none;cursor:pointer;}
-    .modal-ft{padding:12px 20px;background:rgba(0,0,0,.15);border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;}
-    .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); backdrop-filter:blur(10px); display:none; align-items:center; justify-content:center; z-index:999; }
+    .overlay.on { display:flex; }
+    .modal { background:var(--bg-card); border:1px solid var(--border-gold); border-radius:var(--r-lg); width:100%; max-width:480px; box-shadow:0 24px 60px rgba(0,0,0,.6); overflow:hidden; }
+    .modal-hd { padding:18px 22px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+    .modal-hd h3 { font-family:'Outfit'; font-size:18px; font-weight:800; color:var(--gold-light); }
+    .modal-bd { padding:20px 22px; display:flex; flex-direction:column; gap:13px; }
+    .lbl { font-size:11.5px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+    .inp { width:100%; background:var(--bg-input); border:1px solid var(--border); border-radius:var(--r-sm); padding:10px 12px; color:var(--text); font-size:13px; outline:none; transition:border .2s; font-family:inherit; }
+    .inp:focus { border-color:var(--gold); box-shadow:0 0 0 2px var(--gold-glow); }
+    .modal-ft { padding:14px 22px; background:rgba(0,0,0,.2); border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:10px; }
+    .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 
-    /* ── Toast ── */
-    #toasts{position:fixed;top:14px;right:14px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none;}
-    .toast{background:var(--bg-card);border:1px solid var(--border-gold);border-radius:var(--r-sm);padding:10px 16px;color:var(--gold-light);font-weight:600;font-size:12.5px;box-shadow:0 6px 20px rgba(0,0,0,.4);animation:tIn .25s ease;pointer-events:auto;}
-    @keyframes tIn{from{transform:translateX(40px);opacity:0;}to{transform:none;opacity:1;}}
-
-    /* ── Connect status bar ── */
-    .conn-bar{height:32px;background:rgba(111,207,127,.08);border-bottom:1px solid rgba(111,207,127,.15);display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:11.5px;font-weight:600;color:var(--green);flex-shrink:0;display:none;}
-    .conn-bar.on{display:flex;}
+    /* ── Toasts ── */
+    #toasts { position:fixed; top:16px; right:16px; z-index:9999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+    .toast { background:var(--bg-card); border:1px solid var(--border-gold); border-radius:var(--r-sm); padding:11px 18px; color:var(--gold-light); font-weight:600; font-size:13px; box-shadow:0 8px 24px rgba(0,0,0,.5); animation:tIn .22s ease; pointer-events:auto; display:flex; align-items:center; gap:8px; }
+    @keyframes tIn { from { transform:translateX(40px); opacity:0; } to { transform:none; opacity:1; } }
   </style>
 </head>
 <body>
@@ -967,20 +1018,20 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.6.0 • Desktop Client</span>
+          <span class=""sb-ver"">v1.7.0 • Luxury Gold</span>
         </div>
       </div>
       <div class=""sb-nav"">
-        <div class=""sb-cat"">Koneksi</div>
-        <div class=""sb-btn on"" data-v=""conn"" onclick=""go('conn')""><span class=""ic"">⚡</span>Server Profiles</div>
-        <div class=""sb-cat"">Remote</div>
+        <div class=""sb-cat"">Koneksi Server</div>
+        <div class=""sb-btn on"" data-v=""conn"" onclick=""go('conn')""><span class=""ic"">⚡</span>Profil Server</div>
+        <div class=""sb-cat"">Remote File & Tools</div>
         <div class=""sb-btn"" data-v=""files"" onclick=""go('files')""><span class=""ic"">📁</span>File Explorer</div>
-        <div class=""sb-btn"" data-v=""editor"" onclick=""go('editor')""><span class=""ic"">✏️</span>Code Editor</div>
-        <div class=""sb-btn"" data-v=""term"" onclick=""go('term')""><span class=""ic"">💻</span>SSH Terminal</div>
+        <div class=""sb-btn"" data-v=""editor"" onclick=""go('editor')""><span class=""ic"">✏️</span>Pro Code Editor</div>
+        <div class=""sb-btn"" data-v=""term"" onclick=""go('term')""><span class=""ic"">💻</span>SSH Termius</div>
       </div>
       <div class=""sb-foot"">
         <div class=""pulse"" id=""pulse-dot""></div>
-        <span class=""sb-status"" id=""sb-lbl"">Tidak terhubung</span>
+        <span class=""sb-status"" id=""sb-lbl"">Offline</span>
       </div>
     </aside>
 
@@ -992,80 +1043,91 @@ namespace MYSFTP
       </div>
 
       <header class=""topbar"">
-        <div class=""crumbs"" id=""crumbs""><span class=""crumb"">⚡ Server Profiles</span></div>
+        <div class=""crumbs"" id=""crumbs""><span class=""crumb"">⚡ Profil Server</span></div>
         <div style=""display:flex;gap:8px;"" id=""top-actions""></div>
       </header>
 
       <div class=""stage"">
-        <!-- Connections -->
+        <!-- 1. Connections Page -->
         <section class=""page on"" id=""p-conn"">
-          <div style=""display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;"">
+          <div style=""display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;"">
             <div>
-              <h1 class=""sec-title"">Server Profiles</h1>
-              <p class=""sec-sub"">Kelola koneksi SFTP/SSH ke server remote kamu.</p>
+              <h1 class=""sec-title"">Profil Koneksi Server</h1>
+              <p class=""sec-sub"">Kelola server SFTP/SSH VPS Anda dengan koneksi aman dan instan.</p>
             </div>
-            <button class=""btn btn-g"" onclick=""openModal()"">+ Tambah Server</button>
+            <button class=""btn btn-g"" onclick=""openModal()"">+ Tambah Server Baru</button>
           </div>
           <div class=""cards"" id=""cards""></div>
           <div class=""empty-state"" id=""empty-conn"" style=""display:none;"">
             <div class=""empty-icon"">🖥️</div>
-            <div class=""empty-text"">Belum ada profil server.<br>Klik <strong>+ Tambah Server</strong> untuk memulai koneksi SFTP pertamamu.</div>
+            <div class=""empty-text"">Belum ada profil server tersimpan.<br>Klik <strong>+ Tambah Server Baru</strong> untuk menambahkan VPS pertama Anda.</div>
           </div>
         </section>
 
-        <!-- File Explorer -->
+        <!-- 2. File Explorer Page -->
         <section class=""page"" id=""p-files"">
           <div class=""toolbar"">
-            <div style=""display:flex;gap:6px;"">
-              <button class=""btn btn-d btn-sm"" onclick=""fsUp()"">▲ Parent</button>
-              <button class=""btn btn-d btn-sm"" onclick=""fsRefresh()"">↻ Refresh</button>
-              <button class=""btn btn-d btn-sm"" onclick=""fsNew('file')"">+ File</button>
-              <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder</button>
+            <div style=""display:flex;gap:8px;"">
+              <button class=""btn btn-d btn-sm"" onclick=""fsUp()"">◀ Kembali</button>
+              <button class=""btn btn-d btn-sm"" onclick=""fsRefresh()"">🔄 Refresh</button>
+              <button class=""btn btn-d btn-sm"" onclick=""fsNew('file')"">+ File Baru</button>
+              <button class=""btn btn-d btn-sm"" onclick=""fsNew('folder')"">+ Folder Baru</button>
             </div>
             <span id=""fs-info"" class=""fmeta""></span>
           </div>
           <table class=""ftbl"">
-            <thead><tr><th style=""width:50%"">Nama</th><th style=""width:12%"">Ukuran</th><th style=""width:13%"">Tipe</th><th style=""width:15%"">Diubah</th><th style=""width:10%""></th></tr></thead>
+            <thead>
+              <tr>
+                <th style=""width:50%"">Nama Berkas / Folder</th>
+                <th style=""width:13%"">Ukuran</th>
+                <th style=""width:12%"">Tipe</th>
+                <th style=""width:17%"">Terakhir Diubah</th>
+                <th style=""width:8%"">Aksi</th>
+              </tr>
+            </thead>
             <tbody id=""ftbody""></tbody>
           </table>
           <div class=""empty-state"" id=""empty-fs"" style=""display:none;"">
             <div class=""empty-icon"">📂</div>
-            <div class=""empty-text"">Hubungkan ke server terlebih dahulu untuk melihat file remote.</div>
+            <div class=""empty-text"">Silakan hubungkan ke server di tab <strong>Profil Server</strong> terlebih dahulu.</div>
           </div>
         </section>
 
-        <!-- Editor -->
+        <!-- 3. Pro Code Editor Page -->
         <section class=""page"" id=""p-editor"" style=""padding:14px;"">
           <div class=""editor-wrap"">
             <div class=""editor-bar"">
-              <div class=""editor-tab"" id=""ed-tab"">Belum ada file terbuka</div>
-              <div style=""display:flex;gap:6px;"">
-                <button class=""btn btn-g btn-sm"" onclick=""edSave()"">💾 Simpan (Ctrl+S)</button>
+              <div class=""editor-tab"" id=""ed-tab"">📄 Belum ada berkas</div>
+              <div style=""display:flex;gap:8px;"">
+                <button class=""btn btn-g btn-sm"" onclick=""edSave()"">💾 Simpan Berkas (Ctrl+S)</button>
               </div>
             </div>
-            <textarea class=""code-area"" id=""ed-area"" spellcheck=""false"" placeholder=""// Buka file dari File Explorer untuk mulai mengedit...""></textarea>
+            <textarea class=""code-area"" id=""ed-area"" spellcheck=""false"" placeholder=""// Pilih berkas dari File Explorer untuk mulai mengedit...""></textarea>
           </div>
         </section>
 
-        <!-- Terminal -->
+        <!-- 4. SSH Termius Terminal Page -->
         <section class=""page"" id=""p-term"" style=""padding:14px;"">
           <div class=""term-wrap"">
             <div class=""term-bar"">
-              <span class=""term-title"">💻 SSH Terminal</span>
+              <div class=""term-title"">
+                <span>💻 SSH Termius Console</span>
+              </div>
               <div class=""chips"">
-                <span class=""chip"" onclick=""tSend('ls -la')"">ls -la</span>
-                <span class=""chip"" onclick=""tSend('df -h')"">df -h</span>
-                <span class=""chip"" onclick=""tSend('free -m')"">free -m</span>
-                <span class=""chip"" onclick=""tSend('pm2 status')"">pm2 status</span>
-                <span class=""chip"" onclick=""tSend('top -bn1 | head -20')"">top</span>
-                <span class=""chip"" onclick=""tSend('uptime')"">uptime</span>
-                <span class=""chip"" onclick=""tClear()"">Clear</span>
+                <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses yang sedang berjalan (SIGINT)"">🛑 Ctrl+C</button>
+                <span class=""chip"" onclick=""tSend('pm2 status')"">📊 pm2 status</span>
+                <span class=""chip"" onclick=""tSend('pm2 logs')"">📜 pm2 logs</span>
+                <span class=""chip"" onclick=""tSend('ls -la')"">📁 ls -la</span>
+                <span class=""chip"" onclick=""tSend('df -h')"">💾 df -h</span>
+                <span class=""chip"" onclick=""tSend('free -m')"">🧠 free -m</span>
+                <span class=""chip"" onclick=""tSend('uptime')"">⏱️ uptime</span>
+                <span class=""chip"" onclick=""tClear()"">🧹 Clear</span>
               </div>
             </div>
             <div class=""term-screen"" id=""tscreen""></div>
             <div class=""term-input-row"">
-              <span class=""term-prompt"" id=""tprompt"">$</span>
-              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah..."" autocomplete=""off"">
+              <span class=""term-prompt"" id=""tprompt"">root@server:~#</span>
+              <input type=""text"" class=""term-inp"" id=""tinp"" placeholder=""Ketik perintah Linux di sini..."" autocomplete=""off"">
               <button class=""btn btn-g btn-sm"" onclick=""tExec()"">Kirim</button>
             </div>
           </div>
@@ -1117,25 +1179,25 @@ namespace MYSFTP
         </div>
         <div class=""modal-ft"">
           <button type=""button"" class=""btn btn-d"" onclick=""closeModal()"">Batal</button>
-          <button type=""submit"" class=""btn btn-g"">💾 Simpan</button>
+          <button type=""submit"" class=""btn btn-g"">💾 Simpan Profil</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- Connect modal (enter password) -->
+  <!-- Connect Modal -->
   <div class=""overlay"" id=""ov-connect"">
     <div class=""modal"">
       <div class=""modal-hd"">
-        <h3 id=""connect-title"">Hubungkan ke Server</h3>
+        <h3>Hubungkan ke Server</h3>
         <button class=""btn btn-d btn-sm"" onclick=""closeOv('ov-connect')"">✕</button>
       </div>
       <form onsubmit=""event.preventDefault();doConnect();"">
         <div class=""modal-bd"">
-          <div id=""connect-info"" style=""font-size:12.5px;color:var(--text-dim);""></div>
+          <div id=""connect-info"" style=""font-size:13px;color:var(--text-dim);line-height:1.5;""></div>
           <div>
-            <div class=""lbl"">Password</div>
-            <input type=""password"" id=""c-pass"" class=""inp"" placeholder=""Masukkan password server..."" required autofocus>
+            <div class=""lbl"">Password Server</div>
+            <input type=""password"" id=""c-pass"" class=""inp"" placeholder=""Masukkan password..."" required autofocus>
           </div>
           <div id=""connect-error"" style=""color:var(--red);font-size:12px;font-weight:600;display:none;""></div>
         </div>
@@ -1150,28 +1212,34 @@ namespace MYSFTP
   <div id=""toasts""></div>
 
   <script>
-    // ── State ──
     var profiles = [];
     var curView = 'conn';
     var connected = false;
     var connProfile = null;
-    var fsPath = '/';
+    var fsPath = '/root';
     var fsItems = [];
+    var fsCache = {};
     var edFile = null;
     var termPoll = null;
 
-    // ── Init ──
     window.onload = function() {
       loadProfiles();
       document.getElementById('tinp').addEventListener('keydown', function(e) {
         if (e.key === 'Enter') tExec();
       });
       window.addEventListener('keydown', function(e) {
-        if (e.ctrlKey && e.key === 's') { e.preventDefault(); edSave(); }
+        if (e.ctrlKey && e.key === 's') {
+          e.preventDefault();
+          edSave();
+        } else if (e.ctrlKey && e.key === 'c') {
+          if (window.getSelection().toString().length === 0 && curView === 'term') {
+            e.preventDefault();
+            tBreak();
+          }
+        }
       });
     };
 
-    // ── Navigation ──
     function go(v) {
       curView = v;
       document.querySelectorAll('.sb-btn').forEach(function(b) { b.classList.remove('on'); });
@@ -1185,19 +1253,19 @@ namespace MYSFTP
       var acts = document.getElementById('top-actions');
       acts.innerHTML = '';
       if (v === 'conn') {
-        cr.innerHTML = '<span class=""crumb"">⚡ Server Profiles</span>';
+        cr.innerHTML = '<span class=""crumb"">⚡ Profil Server</span>';
         acts.innerHTML = '<button class=""btn btn-g btn-sm"" onclick=""openModal()"">+ Tambah</button>';
       } else if (v === 'files') {
         cr.innerHTML = '<span class=""crumb"">📁 ' + esc(fsPath) + '</span>';
       } else if (v === 'editor') {
-        cr.innerHTML = '<span class=""crumb"">✏️ ' + esc(edFile || 'Code Editor') + '</span>';
+        cr.innerHTML = '<span class=""crumb"">✏️ ' + esc(edFile || 'Pro Code Editor') + '</span>';
         acts.innerHTML = '<button class=""btn btn-g btn-sm"" onclick=""edSave()"">💾 Simpan</button>';
       } else if (v === 'term') {
-        cr.innerHTML = '<span class=""crumb"">💻 SSH Terminal</span>';
+        cr.innerHTML = '<span class=""crumb"">💻 SSH Termius</span>';
+        acts.innerHTML = '<button class=""btn btn-sm btn-break"" onclick=""tBreak()"">🛑 Ctrl+C</button>';
       }
     }
 
-    // ── Profiles ──
     function loadProfiles() {
       fetch('/api/profiles').then(function(r){return r.json();}).then(function(d) {
         profiles = Array.isArray(d) ? d : [];
@@ -1216,16 +1284,16 @@ namespace MYSFTP
         var c = document.createElement('div');
         c.className = 'card';
         var isConn = connected && connProfile && connProfile.id === p.id;
-        if (isConn) c.style.borderColor = 'rgba(111,207,127,.4)';
+        if (isConn) c.style.borderColor = 'rgba(115,210,133,.45)';
         c.innerHTML = '<div class=""card-row""><span class=""tag"">' + esc(p.protocol||'SFTP') + '</span>' +
-          (isConn ? '<span style=""font-size:10px;color:var(--green);font-weight:700;"">● TERHUBUNG</span>' : '') +
+          (isConn ? '<span style=""font-size:10.5px;color:var(--green);font-weight:800;"">● ONLINE</span>' : '') +
           '</div>' +
           '<div class=""card-name"">' + esc(p.name) + '</div>' +
           '<div class=""card-ep"">' + esc(p.username||'') + '@' + esc(p.host||'') + ':' + (p.port||22) + '</div>' +
           '<div class=""card-ping"" id=""ping-' + p.id + '""></div>' +
           '<div class=""card-acts"">' +
           '<button class=""btn btn-d btn-sm"" style=""flex:1;"" onclick=""pingServer(\'' + esc(p.host) + '\',' + (p.port||22) + ',\'' + p.id + '\')"">⚡ Ping</button>' +
-          '<button class=""btn btn-g btn-sm"" style=""flex:2;"" onclick=""promptConnect(\'' + p.id + '\')"">🚀 Hubungkan</button>' +
+          '<button class=""btn btn-g btn-sm"" style=""flex:2;"" onclick=""promptConnect(\'' + p.id + '\')"">🚀 Buka</button>' +
           '<button class=""btn btn-danger btn-sm"" onclick=""delProfile(\'' + p.id + '\')"">🗑</button>' +
           '</div>';
         g.appendChild(c);
@@ -1269,7 +1337,7 @@ namespace MYSFTP
     }
 
     function delProfile(id) {
-      if (!confirm('Hapus profil ini?')) return;
+      if (!confirm('Hapus profil koneksi ini?')) return;
       profiles = profiles.filter(function(x){return x.id!==id;});
       fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)}).then(function(){
         renderCards();
@@ -1284,13 +1352,12 @@ namespace MYSFTP
         .then(function(r){return r.json();})
         .then(function(d) {
           if (el) {
-            if (d.online) el.innerHTML = '<span style=""color:var(--green)"">● Online — ' + d.latency + 'ms</span>';
-            else el.innerHTML = '<span style=""color:var(--red)"">● Offline / Port tertutup</span>';
+            if (d.online) el.innerHTML = '<span style=""color:var(--green)"">● Online (' + d.latency + ' ms)</span>';
+            else el.innerHTML = '<span style=""color:var(--red)"">● Host Offline / Port tertutup</span>';
           }
         });
     }
 
-    // ── Connect flow ──
     var pendingConnId = null;
 
     function promptConnect(id) {
@@ -1301,8 +1368,9 @@ namespace MYSFTP
         connProfile = p;
         connected = true;
         document.getElementById('sb-lbl').textContent = p.name;
+        document.getElementById('pulse-dot').classList.add('live');
         document.getElementById('conn-bar').classList.add('on');
-        document.getElementById('conn-bar-text').textContent = '● Terhubung — ' + p.name + ' (Local)';
+        document.getElementById('conn-bar-text').textContent = '● Terhubung — ' + p.name + ' (Local Drive)';
         renderCards();
         go('files');
         fsLoad('/');
@@ -1344,7 +1412,6 @@ namespace MYSFTP
         btn.disabled = false;
 
         if (res.success) {
-          // Update password in profile
           p.password = pw;
           fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(profiles)});
 
@@ -1353,28 +1420,25 @@ namespace MYSFTP
           closeOv('ov-connect');
 
           document.getElementById('sb-lbl').textContent = p.name;
+          document.getElementById('pulse-dot').classList.add('live');
           document.getElementById('conn-bar').classList.add('on');
           document.getElementById('conn-bar-text').textContent = '● Terhubung ke ' + p.name + ' (' + p.host + ')';
-          document.getElementById('tprompt').textContent = p.username + '@' + p.host + ':~$';
-          document.getElementById('pulse-dot').style.background = 'var(--green)';
+          document.getElementById('tprompt').textContent = p.username + '@' + p.host + ':~#';
 
           renderCards();
           go('files');
           fsLoad(p.protocol === 'LOCAL' ? '/' : '/root');
-
-          // Start terminal output polling
           startTermPoll();
-
           toast('Berhasil terhubung ke ' + p.name + '!');
         } else {
           var errEl = document.getElementById('connect-error');
-          errEl.textContent = '❌ Gagal terhubung: ' + (res.error || 'Periksa kembali kredensial Anda');
+          errEl.textContent = '❌ Gagal terhubung: ' + (res.error || 'Periksa username & password');
           errEl.style.display = 'block';
         }
       }).catch(function(err) {
         btn.innerHTML = '🚀 Hubungkan';
         btn.disabled = false;
-        document.getElementById('connect-error').textContent = '❌ Network error: ' + err.message;
+        document.getElementById('connect-error').textContent = '❌ Kesalahan: ' + err.message;
         document.getElementById('connect-error').style.display = 'block';
       });
     }
@@ -1383,39 +1447,54 @@ namespace MYSFTP
       fetch('/api/disconnect',{method:'POST'}).then(function() {
         connected = false;
         connProfile = null;
+        fsCache = {};
         stopTermPoll();
-        document.getElementById('sb-lbl').textContent = 'Tidak terhubung';
+        document.getElementById('sb-lbl').textContent = 'Offline';
+        document.getElementById('pulse-dot').classList.remove('live');
         document.getElementById('conn-bar').classList.remove('on');
-        document.getElementById('pulse-dot').style.background = 'var(--red)';
-        document.getElementById('tprompt').textContent = '$';
+        document.getElementById('tprompt').textContent = 'root@server:~#';
         document.getElementById('tscreen').innerHTML = '';
         renderCards();
         go('conn');
-        toast('Koneksi diputus.');
+        toast('Koneksi diputuskan.');
       });
     }
 
-    // ── File Explorer ──
+    // Fast cached file loader
     function fsLoad(path) {
-      if (!path) path = '/';
+      if (!path) path = '/root';
+      
+      // Instant cache render
+      if (fsCache[path]) {
+        fsPath = path;
+        fsItems = fsCache[path];
+        renderFiles();
+      }
+
       fetch('/api/fs/list?path=' + encodeURIComponent(path))
         .then(function(r){return r.json();})
         .then(function(d) {
           if (d.success) {
             fsPath = d.currentPath;
             fsItems = d.items || [];
+            fsCache[fsPath] = fsItems;
             renderFiles();
           } else {
-            toast('Error: ' + (d.error || 'Gagal memuat direktori'));
+            toast('❌ Gagal: ' + (d.error || 'Folder tidak dapat diakses'));
           }
+        }).catch(function(err) {
+          toast('❌ Error: ' + err.message);
         });
     }
 
-    function fsRefresh() { fsLoad(fsPath); }
+    function fsRefresh() {
+      delete fsCache[fsPath];
+      fsLoad(fsPath);
+    }
 
     function fsUp() {
       var p = fsPath;
-      if (p === '/') return;
+      if (p === '/' || !p) return;
       var idx = p.lastIndexOf('/');
       if (idx <= 0) fsLoad('/');
       else fsLoad(p.substring(0, idx));
@@ -1449,7 +1528,7 @@ namespace MYSFTP
           '<td class=""fmeta"">' + sz + '</td>' +
           '<td class=""fmeta"">' + type + '</td>' +
           '<td class=""fmeta"">' + esc(f.modified||'') + '</td>' +
-          '<td><button class=""btn btn-danger btn-sm del-btn"" onclick=""event.stopPropagation();fsDel(\'' + escAttr(f.path) + '\',\'' + esc(f.name) + '\')"">🗑</button></td>';
+          '<td><button class=""btn btn-danger btn-sm del-btn"" onclick=""event.stopPropagation();fsDel(\'' + esc(f.path) + '\',\'' + esc(f.name) + '\')"">🗑</button></td>';
 
         tr.onclick = function() {
           if (isD) fsLoad(f.path);
@@ -1460,56 +1539,55 @@ namespace MYSFTP
     }
 
     function fsNew(type) {
-      var name = prompt(type === 'folder' ? 'Nama folder baru:' : 'Nama file baru:');
+      var name = prompt(type === 'folder' ? 'Nama folder baru:' : 'Nama berkas baru:');
       if (!name) return;
       var fullPath = fsPath.replace(/\/$/,'') + '/' + name;
       fetch('/api/fs/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fullPath,type:type})})
         .then(function(r){return r.json();})
         .then(function(d) {
-          if (d.success) { fsRefresh(); toast(type==='folder' ? 'Folder dibuat!' : 'File dibuat!'); }
-          else toast('Error: ' + (d.error || 'Gagal'));
+          if (d.success) { fsRefresh(); toast(type==='folder'?'Folder dibuat!':'Berkas dibuat!'); }
+          else toast('Gagal: ' + (d.error||'Error'));
         });
     }
 
     function fsDel(path, name) {
-      if (!confirm('Hapus ' + name + '?')) return;
+      if (!confirm('Hapus berkas atau folder ini?')) return;
       fetch('/api/fs/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})})
         .then(function(r){return r.json();})
         .then(function(d) {
-          if (d.success) { fsRefresh(); toast('Berhasil dihapus!'); }
-          else toast('Error: ' + (d.error || 'Gagal menghapus'));
+          if (d.success) { fsRefresh(); toast('Item dihapus.'); }
+          else toast('Gagal menghapus: ' + (d.error||'Error'));
         });
     }
 
-    // Editor
     function edOpen(path, name) {
       edFile = path;
       go('editor');
-      document.getElementById('ed-tab').textContent = String.fromCodePoint(0x1F4C4) + ' ' + (name || path.split('/').pop());
-      document.getElementById('ed-area').value = 'Memuat file...';
+      document.getElementById('ed-tab').textContent = '📄 ' + (name || path.split('/').pop());
+      document.getElementById('ed-area').value = '// Memuat berkas...';
       fetch('/api/fs/read?path=' + encodeURIComponent(path))
         .then(function(r){return r.json();})
         .then(function(d) {
           if (d.success) {
             document.getElementById('ed-area').value = d.content || '';
           } else {
-            document.getElementById('ed-area').value = '// Error: ' + (d.error || 'Gagal memuat file');
+            document.getElementById('ed-area').value = '// Gagal memuat berkas: ' + (d.error || 'Unknown error');
           }
         });
     }
 
     function edSave() {
-      if (!edFile) { toast('Tidak ada file yang terbuka.'); return; }
+      if (!edFile) { toast('Tidak ada berkas yang terbuka.'); return; }
       var content = document.getElementById('ed-area').value;
       fetch('/api/fs/write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:edFile,content:content})})
         .then(function(r){return r.json();})
         .then(function(d) {
-          if (d.success) toast('File berhasil disimpan!');
-          else toast('Error: ' + (d.error || 'Gagal menyimpan'));
+          if (d.success) toast('✔ Berkas berhasil disimpan ke server!');
+          else toast('Gagal menyimpan: ' + (d.error||'Error'));
         });
     }
 
-    // Terminal
+    // ── SSH Termius Terminal Engine ──
     function startTermPoll() {
       stopTermPoll();
       termPoll = setInterval(function() {
@@ -1518,7 +1596,7 @@ namespace MYSFTP
           .then(function(d) {
             if (d.output) tPrint(d.output);
           });
-      }, 300);
+      }, 250);
     }
 
     function stopTermPoll() {
@@ -1539,40 +1617,72 @@ namespace MYSFTP
       if (cmd === 'clear') { tClear(); return; }
 
       if (!connected) {
-        tPrint('Error: Belum terhubung ke server. Hubungkan dulu.\n');
+        tPrint('\r\n[!] Belum terhubung ke server. Buka tab Profil Server lalu klik Hubungkan.\r\n');
         return;
       }
 
       fetch('/api/terminal/input',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:cmd})});
     }
 
+    function tBreak() {
+      if (!connected) return;
+      fetch('/api/terminal/break',{method:'POST'});
+      toast('🛑 Signal SIGINT (Ctrl+C) terkirim.');
+    }
+
+    // Full ANSI and Box Drawing Parser
     function tPrint(txt) {
       var box = document.getElementById('tscreen');
-      var esc27 = String.fromCharCode(27);
-      var html = esc(txt)
-        .replace(new RegExp(esc(esc27) + '\\[0m', 'g'), '</span>')
-        .replace(new RegExp(esc(esc27) + '\\[1m', 'g'), '<span style=""font-weight:bold"">')
-        .replace(new RegExp(esc(esc27) + '\\[32m', 'g'), '<span style=""color:#6fcf7f"">')
-        .replace(new RegExp(esc(esc27) + '\\[31m', 'g'), '<span style=""color:#e06c75"">')
-        .replace(new RegExp(esc(esc27) + '\\[33m', 'g'), '<span style=""color:#e5c07b"">')
-        .replace(new RegExp(esc(esc27) + '\\[34m', 'g'), '<span style=""color:#61afef"">')
-        .replace(new RegExp(esc(esc27) + '\\[35m', 'g'), '<span style=""color:#c678dd"">')
-        .replace(new RegExp(esc(esc27) + '\\[36m', 'g'), '<span style=""color:#56c8d8"">')
-        .replace(new RegExp(esc(esc27) + '\\[[0-9;]+m', 'g'), '');
+      var html = parseAnsi(txt);
       box.innerHTML += html;
       box.scrollTop = box.scrollHeight;
     }
 
+    function parseAnsi(str) {
+      if (!str) return '';
+      // Escape HTML chars
+      var s = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
+      // Clean terminal cursor escapes
+      s = s.replace(/\x1b\[\?25[hl]/g, '')
+           .replace(/\x1b\[[0-9;]*[HfABCDJK]/g, '');
+
+      // ANSI Color Codes
+      s = s.replace(/\x1b\[0m/g, '</span>')
+           .replace(/\x1b\[1m/g, '<span style=""font-weight:700;"">')
+           .replace(/\x1b\[2m/g, '<span style=""opacity:0.6;"">')
+           .replace(/\x1b\[3m/g, '<span style=""font-style:italic;"">')
+           .replace(/\x1b\[4m/g, '<span style=""text-decoration:underline;"">')
+           .replace(/\x1b\[30m/g, '<span style=""color:#4b5263;"">')
+           .replace(/\x1b\[31m/g, '<span style=""color:#e06c75;"">')
+           .replace(/\x1b\[32m/g, '<span style=""color:#73d285;"">')
+           .replace(/\x1b\[33m/g, '<span style=""color:#e5c07b;"">')
+           .replace(/\x1b\[34m/g, '<span style=""color:#6ab0f3;"">')
+           .replace(/\x1b\[35m/g, '<span style=""color:#c678dd;"">')
+           .replace(/\x1b\[36m/g, '<span style=""color:#56c8d8;"">')
+           .replace(/\x1b\[37m/g, '<span style=""color:#e6e3da;"">')
+           .replace(/\x1b\[90m/g, '<span style=""color:#636d83;"">')
+           .replace(/\x1b\[91m/g, '<span style=""color:#f28b93;"">')
+           .replace(/\x1b\[92m/g, '<span style=""color:#8be39b;"">')
+           .replace(/\x1b\[93m/g, '<span style=""color:#f5d18d;"">')
+           .replace(/\x1b\[94m/g, '<span style=""color:#88c3f7;"">')
+           .replace(/\x1b\[95m/g, '<span style=""color:#d898ec;"">')
+           .replace(/\x1b\[96m/g, '<span style=""color:#78dcee;"">')
+           .replace(/\x1b\[97m/g, '<span style=""color:#ffffff;"">')
+           .replace(/\x1b\[([0-9;]+)m/g, '');
+
+      return s;
+    }
+
     function tClear() { document.getElementById('tscreen').innerHTML = ''; }
 
-    // Utilities
     function toast(msg) {
       var box = document.getElementById('toasts');
       var t = document.createElement('div');
       t.className = 'toast';
       t.textContent = msg;
       box.appendChild(t);
-      setTimeout(function(){t.remove();}, 3500);
+      setTimeout(function(){ t.remove(); }, 3200);
     }
 
     function esc(s) {
@@ -1582,18 +1692,16 @@ namespace MYSFTP
       return d.innerHTML;
     }
 
-    function escAttr(s) { return esc(s || ''); }
-
     function getFileIcon(name) {
       var ext = (name || '').split('.').pop().toLowerCase();
-      var m = {js:'📜',ts:'📘',json:'📋',html:'🌐',css:'🎨',py:'🐍',kt:'🟣',java:'☕',md:'📝',txt:'📝',sh:'⚙️',yml:'📦',yaml:'📦',xml:'📦',env:'🔐',sql:'🗄️',log:'📊'};
+      var m = {js:'📜',ts:'📘',json:'📋',html:'🌐',css:'🎨',py:'🐍',kt:'🟣',java:'☕',md:'📝',txt:'📝',sh:'⚙️',yml:'📦',yaml:'📦',xml:'📦',env:'🔐',sql:'🗄️',log:'📊',jpg:'🖼️',png:'🖼️',svg:'🖼️'};
       return m[ext] || '📄';
     }
 
     function getExt(name) {
       if (!name) return '';
       var parts = name.split('.');
-      return parts.length > 1 ? parts.pop().toUpperCase() : 'FILE';
+      return parts.length > 1 ? parts.pop().toUpperCase() : 'BERKAS';
     }
 
     function fmtSize(bytes) {
