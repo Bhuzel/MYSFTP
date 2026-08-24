@@ -386,7 +386,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v194");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v195");
             }
             catch { }
 
@@ -607,7 +607,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = browser;
-                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v194\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
+                psi.Arguments = "--app=\"" + url + "\" --app-id=\"MYSFTP_Client_v195\" --window-size=1340,880 --window-name=\"MYSFTP\" --user-data-dir=\"" + userProfile + "\" --disable-extensions --disable-component-extensions-with-background-pages --disable-background-networking --no-default-browser-check --no-first-run --disable-session-crashed-bubble --no-crash-upload";
                 psi.UseShellExecute = false;
 
                 try
@@ -645,7 +645,22 @@ namespace MYSFTP
                     HttpListenerContext ctx = listener.GetContext();
                     ThreadPool.QueueUserWorkItem((o) => HandleRequest(ctx));
                 }
-                catch { break; }
+                catch
+                {
+                    // ── Fix: "Failed to fetch" on every request after the first hiccup ──
+                    // GetContext() can throw for all sorts of harmless, transient
+                    // reasons — a client aborting mid-request, a malformed request
+                    // line, momentary AV interference, etc. The old code treated
+                    // ANY such exception as fatal and permanently stopped accepting
+                    // new connections, which silently killed the whole local server
+                    // for the rest of the app's life (every fetch() in the UI then
+                    // failed with "Failed to fetch" until the app was restarted).
+                    // Now we only stop the loop if the listener was actually shut
+                    // down (app closing); anything else is just skipped and the
+                    // server keeps serving.
+                    if (!isRunning || !listener.IsListening) break;
+                    Thread.Sleep(50);
+                }
             }
         }
 
@@ -1433,7 +1448,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v1.9.4 • Dedicated Suite</span>
+          <span class=""sb-ver"">v1.9.5 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
