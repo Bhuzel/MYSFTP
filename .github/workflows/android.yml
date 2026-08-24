@@ -41,29 +41,31 @@ jobs:
       run: |
         mkdir -p build-artifacts
         cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP.apk
-        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.3.0.apk
+        cp app/build/outputs/apk/debug/app-debug.apk build-artifacts/MYSFTP-v1.4.0.apk
         if [ -f "MYSFTP.exe" ]; then
           cp MYSFTP.exe build-artifacts/MYSFTP.exe
+          cp MYSFTP.exe build-artifacts/MYSFTP-v1.4.0.exe
         fi
 
     - name: Upload APK Artifact (Actions Tab)
       uses: actions/upload-artifact@v4
       with:
-        name: MYSFTP-v1.3.0-Build
+        name: MYSFTP-v1.4.0-Build
         path: build-artifacts/
 
     - name: Create or Update GitHub Release
       if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.3.0' }}
-        name: "MYSFTP v1.3.0 (Pro Edition)"
-        body: "🌟 **MYSFTP v1.3.0 — Luxury Dark Edition** by ZellRayy.\n\n### ✨ Pembaruan v1.3.0:\n* 📝 **Code Editor Routing**: File kode dan konfigurasi seperti `package.json`, `.sql`, `.xml`, `.env` dll langsung terbuka di **Pro Code Editor** (bukan database table).\n* 📁 **Folder Retention on Back**: Mengedit file dan menekan tombol simpan/kembali tidak lagi mereset folder; posisi direktori aktif (misal `/root/project/saya`) tetap terjaga rapi.\n* 💻 **SSH Terminal Drag & Copy**: Teks terminal sekarang dapat di-drag dan disalin (*SelectionContainer*), dilengkapi horizontal scrolling saat zoom-in agar teks tidak kepotong.\n* ⚡ **Zero-Drop Terminal Session**: Keluar dan masuk terminal tidak lagi memutuskan shell (sesi tetap hijau aktif seketika).\n* 🔌 **Auto-Heal Pipe Closed**: SFTP client secara otomatis memulihkan koneksi jika terjadi socket pipe drop.\n* 🖥️ **Windows Desktop MYSFTP.exe Dark Overhaul**: Tampilan desktop murni Luxury Dark Gold (`#0A0A0B`), penyimpanan profil permanen (`connections.json`), dan performa mulus.\n\n### 📦 File Unduhan:\n* 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (Standalone Native Form, tinggal klik ganda).\n* 📱 **HP Android:** Unduh `MYSFTP.apk` (Mendukung OTA Update otomatis)."
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.4.0' }}
+        name: "MYSFTP v1.4.0 (Desktop Native & Android Pro Release)"
+        body: "🌟 **MYSFTP v1.4.0 — Desktop Native & Android Pro Edition** by ZellRayy.\n\n### ✨ Pembaruan Utama v1.4.0:\n* 🖥️ **Windows Desktop Native Overhaul (`MYSFTP.exe`)**: Dibuat 100% menggunakan Native Windows Controls dengan performa super instan, dark gold theme murni, tanpa kendala browser IE/blank screen!\n* 🎨 **Official Windows Icon**: Ikon resmi `app.ico` (dari `Icon.jpg`) telah tertanam permanen di dalam file `.exe`, taskbar, dan header aplikasi.\n* 📱 **Android Code Editor Routing**: Berkas `package.json`, `.sql`, `.xml`, `.env` otomatis terbuka di Pro Code Editor.\n* 📂 **Folder Navigation Retention**: Navigasi kembali dari editor file tetap mempertahankan direktori folder aktif tanpa ter-reset ke root.\n* 💻 **SSH Terminal Termius Experience**: Fitur drag-select salin teks, zoom-in horizontal scrolling, dan sesi yang tidak pernah putus saat keluar-masuk terminal.\n\n### 📦 File Unduhan Resmi:\n* 💻 **Windows PC / Laptop:** Unduh `MYSFTP.exe` (atau `MYSFTP-v1.4.0.exe`). Tinggal klik 2x langsung terbuka.\n* 📱 **HP Android:** Unduh `MYSFTP.apk` (atau `MYSFTP-v1.4.0.apk`)."
         draft: false
         prerelease: false
         files: |
           build-artifacts/MYSFTP.apk
-          build-artifacts/MYSFTP-v1.3.0.apk
+          build-artifacts/MYSFTP-v1.4.0.apk
           build-artifacts/MYSFTP.exe
+          build-artifacts/MYSFTP-v1.4.0.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
