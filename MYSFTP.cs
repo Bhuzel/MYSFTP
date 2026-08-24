@@ -273,6 +273,95 @@ namespace MYSFTP
             catch { }
         }
 
+        public byte[] ReadRemoteBytes(string remotePath)
+        {
+            if (!connected || string.IsNullOrEmpty(host)) return new byte[0];
+            string apPath = CreateAskPass();
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = FindSshExe();
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"base64 -w 0 " + EscapeShell(remotePath) + "\"";
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.CreateNoWindow = true;
+                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
+                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
+                psi.EnvironmentVariables["DISPLAY"] = ":0";
+
+                Process p = Process.Start(psi);
+                string b64 = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(30000);
+                if (!p.HasExited) try { p.Kill(); } catch { }
+
+                try
+                {
+                    return Convert.FromBase64String(b64.Trim());
+                }
+                catch
+                {
+                    return Encoding.UTF8.GetBytes(b64);
+                }
+            }
+            catch
+            {
+                return new byte[0];
+            }
+            finally
+            {
+                try { File.Delete(apPath); } catch { }
+            }
+        }
+
+        public byte[] ArchiveRemoteItems(List<string> paths)
+        {
+            if (!connected || string.IsNullOrEmpty(host) || paths == null || paths.Count == 0) return new byte[0];
+            string apPath = CreateAskPass();
+            try
+            {
+                StringBuilder tarCmd = new StringBuilder("tar -czf -");
+                foreach (string itemPath in paths)
+                {
+                    if (!string.IsNullOrEmpty(itemPath)) tarCmd.Append(" " + EscapeShell(itemPath));
+                }
+                tarCmd.Append(" 2>/dev/null | base64 -w 0");
+
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = FindSshExe();
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + tarCmd.ToString() + "\"";
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.CreateNoWindow = true;
+                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
+                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
+                psi.EnvironmentVariables["DISPLAY"] = ":0";
+
+                Process proc = Process.Start(psi);
+                string b64 = proc.StandardOutput.ReadToEnd();
+                proc.WaitForExit(60000);
+                if (!proc.HasExited) try { proc.Kill(); } catch { }
+
+                try
+                {
+                    return Convert.FromBase64String(b64.Trim());
+                }
+                catch
+                {
+                    return new byte[0];
+                }
+            }
+            catch
+            {
+                return new byte[0];
+            }
+            finally
+            {
+                try { File.Delete(apPath); } catch { }
+            }
+        }
+
         public string WriteRemoteBytes(string remotePath, byte[] data)
         {
             if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
@@ -973,6 +1062,68 @@ namespace MYSFTP
                         SendJson(res, "{\"success\":true}");
                     }
                 }
+                else if (path == "/api/fs/download")
+                {
+                    string fPath = req.QueryString["path"] ?? "";
+                    string isDirStr = req.QueryString["isDir"] ?? "false";
+                    bool isDir = isDirStr.ToLower() == "true";
+
+                    if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
+                    {
+                        if (isDir)
+                        {
+                            List<string> pList = new List<string>();
+                            pList.Add(fPath);
+                            byte[] archive = sshManager.ArchiveRemoteItems(pList);
+                            string dirName = Path.GetFileName(fPath.TrimEnd('/'));
+                            if (string.IsNullOrEmpty(dirName)) dirName = "folder";
+                            res.ContentType = "application/gzip";
+                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + dirName + ".tar.gz\"");
+                            res.ContentLength64 = archive.Length;
+                            res.OutputStream.Write(archive, 0, archive.Length);
+                            try { res.OutputStream.Flush(); } catch { }
+                        }
+                        else
+                        {
+                            byte[] fileBytes = sshManager.ReadRemoteBytes(fPath);
+                            string fileName = Path.GetFileName(fPath);
+                            res.ContentType = "application/octet-stream";
+                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
+                            res.ContentLength64 = fileBytes.Length;
+                            res.OutputStream.Write(fileBytes, 0, fileBytes.Length);
+                            try { res.OutputStream.Flush(); } catch { }
+                        }
+                    }
+                    else
+                    {
+                        string localPath = fPath.Replace('/', '\\');
+                        if (File.Exists(localPath))
+                        {
+                            byte[] fileBytes = File.ReadAllBytes(localPath);
+                            string fileName = Path.GetFileName(localPath);
+                            res.ContentType = "application/octet-stream";
+                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
+                            res.ContentLength64 = fileBytes.Length;
+                            res.OutputStream.Write(fileBytes, 0, fileBytes.Length);
+                            try { res.OutputStream.Flush(); } catch { }
+                        }
+                    }
+                }
+                else if (path == "/api/fs/batch-download" && req.HttpMethod == "POST")
+                {
+                    string body = ReadBody(req);
+                    List<string> paths = ParseJsonStringArray(body);
+
+                    if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
+                    {
+                        byte[] archive = sshManager.ArchiveRemoteItems(paths);
+                        res.ContentType = "application/gzip";
+                        res.AddHeader("Content-Disposition", "attachment; filename=\"MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".tar.gz\"");
+                        res.ContentLength64 = archive.Length;
+                        res.OutputStream.Write(archive, 0, archive.Length);
+                        try { res.OutputStream.Flush(); } catch { }
+                    }
+                }
                 else if (path == "/api/fs/create" && req.HttpMethod == "POST")
                 {
                     string body = ReadBody(req);
@@ -1501,8 +1652,8 @@ namespace MYSFTP
     .fname { display:flex; align-items:center; gap:10px; font-weight:600; color:var(--text); }
     .fname.dir { color:var(--gold-light); }
     .fmeta { font-family:'JetBrains Mono'; color:var(--text-dim); font-size:12px; }
-    .frow .del-btn { opacity:0; transition:opacity .15s; }
-    .frow:hover .del-btn { opacity:1; }
+    .frow .row-acts { opacity:0; transition:opacity .15s; display:flex; gap:6px; }
+    .frow:hover .row-acts { opacity:1; }
     .chk-box { width:15px; height:15px; accent-color:var(--gold); cursor:pointer; vertical-align:middle; }
     .batch-bar { display:none; align-items:center; justify-content:space-between; background:rgba(205,189,148,0.1); border:1px solid var(--border-gold); padding:9px 16px; border-radius:var(--r-sm); margin-bottom:12px; animation:tIn .2s ease; flex-shrink:0; }
     .batch-bar.on { display:flex; }
@@ -1622,6 +1773,7 @@ namespace MYSFTP
           <div class=""batch-bar"" id=""batch-bar"">
             <span id=""batch-count"" style=""font-weight:700;color:var(--gold-light);font-size:13px;"">0 item terpilih</span>
             <div style=""display:flex;gap:8px;"">
+              <button class=""btn btn-upload btn-sm"" onclick=""downloadSelected()"">📥 Download Terpilih</button>
               <button class=""btn btn-danger btn-sm"" onclick=""deleteSelected()"">🗑 Hapus Terpilih</button>
               <button class=""btn btn-d btn-sm"" onclick=""clearSelection()"">✕ Batal</button>
             </div>
@@ -2315,6 +2467,51 @@ namespace MYSFTP
       });
     }
 
+    function fsDownload(path, name, isDir) {
+      toast('⏳ Mengunduh ' + (isDir ? 'folder: ' : 'berkas: ') + name);
+      var url = '/api/fs/download?path=' + encodeURIComponent(path) + '&isDir=' + (isDir ? 'true' : 'false');
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = isDir ? (name + '.tar.gz') : name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function downloadSelected() {
+      if (!selectedPaths.length) return;
+      if (selectedPaths.length === 1) {
+        var p = selectedPaths[0];
+        var item = fsItems.find(function(f){ return f.path === p; });
+        var isD = item ? item.isDirectory : false;
+        var name = item ? item.name : p.split('/').pop();
+        fsDownload(p, name, isD);
+        return;
+      }
+      var count = selectedPaths.length;
+      toast('⏳ Mengompresi ' + count + ' item terpilih untuk diunduh...');
+      showLoader(true);
+      fetch('/api/fs/batch-download', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json; charset=utf-8'},
+        body: JSON.stringify(selectedPaths)
+      }).then(function(r) { return r.blob(); }).then(function(blob) {
+        showLoader(false);
+        var url = window.URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'MYSFTP_Archive_' + Date.now() + '.tar.gz';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        toast('✔ Unduhan berhasil!');
+      }).catch(function(err) {
+        showLoader(false);
+        toast('❌ Gagal mengunduh: ' + err.message);
+      });
+    }
+
     function renderFiles() {
       var tb = document.getElementById('ftbody');
       var em = document.getElementById('empty-fs');
@@ -2350,7 +2547,10 @@ namespace MYSFTP
           '<td class=""fmeta"">' + sz + '</td>' +
           '<td class=""fmeta"">' + type + '</td>' +
           '<td class=""fmeta"">' + esc(f.modified||'') + '</td>' +
-          '<td><button class=""btn btn-danger btn-sm del-btn"" onclick=""event.stopPropagation();fsDel(\'' + esc(f.path) + '\',\'' + esc(f.name) + '\')"">🗑</button></td>';
+          '<td><div class=""row-acts"">' +
+          '<button class=""btn btn-d btn-sm"" title=""Download"" onclick=""event.stopPropagation();fsDownload(\'' + esc(f.path) + '\',\'' + esc(f.name) + '\',' + (isD?'true':'false') + ')"">📥</button>' +
+          '<button class=""btn btn-danger btn-sm"" title=""Hapus"" onclick=""event.stopPropagation();fsDel(\'' + esc(f.path) + '\',\'' + esc(f.name) + '\')"">🗑</button>' +
+          '</div></td>';
 
         tr.onclick = function(e) {
           if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
@@ -2681,8 +2881,13 @@ namespace MYSFTP
     }
 
     function tPrint(txt) {
+      if (!txt) return;
+      var clean = txt.replace(/Warning: Permanently added[^\r\n]*\r?\n?/g, '')
+                     .replace(/bash: cannot set terminal process group[^\r\n]*\r?\n?/g, '')
+                     .replace(/bash: no job control in this shell\r?\n?/g, '');
+      if (!clean) return;
       var box = document.getElementById('tscreen');
-      var html = parseAnsi(txt);
+      var html = parseAnsi(clean);
       box.innerHTML += html;
       box.scrollTop = box.scrollHeight;
     }
