@@ -1,36 +1,39 @@
+# MYSFTP v2.0.3 — High-Performance & Universal Linux Suite
+
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.3
+
+### 1. ⚡ Ultra-Fast Directory Navigation & Zero-Disk-Churn
+- **AskPass Caching:** Menghilangkan pembuatan/penghapusan file temporer berulang di disk pada setiap command SSH, menghapus latency scan Windows Defender sehingga membuka server dan folder terasa sangat cepat.
+- **Optimistic In-Memory Directory Cache:** Folder yang sudah pernah dibuka akan ditampilkan seketika (**0ms**) saat navigasi bolak-balik, lalu secara cerdas di-refresh di latar belakang.
+- **Low-Latency SSH Options:** Menambahkan parameter `-o Compression=no -o TCPKeepAlive=yes -o ConnectTimeout=5` untuk respon SSH instan.
+
+### 2. 🌐 Universal Multi-Format Linux Directory Parser
+- Menggunakan parser cerdas multi-format yang kompatibel 100% dengan semua distro Linux (Debian, Ubuntu, CentOS, RHEL, Alpine, BusyBox, OpenWrt, Arch, BSD, macOS, dll.).
+- Menjamin seluruh direktori (termasuk `/root`) terbaca lengkap tanpa masalah parsing kolom atau locale bahasa.
+
+### 3. 🛡️ Perbaikan Error JSON `size:tidak` & Delimiter Base64
+- Field `size` dijamin selalu berupa angka valid (`long`), bebas dari token error tak valid.
+- Marker unik `___MYSFTP_B64_START___` dan `___MYSFTP_B64_END___` mengisolasi transmisi data dari gangguan banner login/MOTD.
+
+### 4. 🗜️ Robust In-Memory ZIP Archiving Engine
+- Header dan Central Directory ZIP diselaraskan secara konsisten sesuai standar PKWare, mencegah korupsi file 0-byte.
+- Semua nama berkas/folder berspasi di-quote secara aman `'...'` saat pengompresan batch atau folder tunggal.
+
+---
+
 # MYSFTP v2.0.2 — Hotfix JSON Parsing & Robust ZIP Archiving Engine
-
-## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.2
-
-### 1. 🛡️ Perbaikan Error JSON `Unexpected token 'i', ..."size":tidak...`
-- **Penyebab:** Pada server VPS Linux dengan locale non-Inggris atau pesan peringatan (warning/error/banner) bahasa Indonesia (seperti `ls: tidak dapat mengakses...`), teks tersebut ikut ter-split sehingga string `"tidak"` masuk tanpa tanda kutip ke field integer `size`. Akibatnya `JSON.parse()` di browser gagal.
-- **Perbaikan:** 
-  - Memaksa `LC_ALL=C` saat memanggil `ls -la` agar format listing selalu standar POSIX.
-  - Memfilter dan hanya memproses baris dengan permission Unix valid (`-`, `d`, `l`, `c`, `b`, `s`, `p`).
-  - Menggunakan `long.TryParse()` yang menjamin field `size` selalu berupa angka valid (misal `0` atau `102400`), dan menangani string error baik bahasa Indonesia maupun Inggris.
-
-### 2. 🗜️ Robust ZIP Archiving & Download Fix
-- **Delimiter Isolasi SSH:** Menambahkan marker unik `___MYSFTP_B64_START___` dan `___MYSFTP_B64_END___` saat stream `tar | base64` agar banner MOTD/login SSH tidak mengotori payload arsip dan tidak menimbulkan file 0-byte corrupt.
-- **Dukungan Nama Berkas Berspasi:** Semua path dan nama file pada command `tar` kini di-quote secara aman `'...'`.
-- **Penyelarasan Header ZipPacker:** Memperbaiki ketidakcocokan compression method antara Local Header dan Central Directory pada file 0-byte, sehingga arsip ZIP 100% valid dan langsung bisa dibuka di Windows Explorer.
-- **Dukungan ZIP untuk Local Storage:** Mode folder download dan batch download kini juga mendukung mode Local Drive.
+- Perbaikan parsing `size` integer JSON dan delimiter base64 untuk isolasi banner SSH.
 
 ---
 
 # MYSFTP v2.0.1 — Hotfix & Solid ZIP Archiving Engine
-
-## ✨ Fitur & Perbaikan di Versi 2.0.1
-- **Engine ZipPacker C# Internal:** Kompresi remote folder secara in-memory menjadi `.zip` murni standar.
-- **Struktur Direktori Bersih:** Unduhan folder remote tidak lagi membawa rantai parent path yang panjang.
-- **Custom Luxury Glassmorphism Modals:** Modal elegan dark gold menggantikan pop-up browser bawaan.
-- **Upload Folder & Batch Actions:** Dukungan upload folder rekursif dan multi-select batch delete/download.
-- **SSH Termius Console:** Menghilangkan duplikasi echo dan responsif tombol `🛑 Ctrl+C`.
+- Engine ZipPacker C# Internal, Luxury Glassmorphism Modals, Batch actions, dan terminal responsif.
 
 ---
 
 ## 📦 File Rilis Resmi (Clean Single Assets):
-* 💻 **Windows PC:** `MYSFTP-v2.0.2-Setup.exe` (Installer tunggal resmi)
-* 📱 **Android:** `MYSFTP-v2.0.2.apk` (Aplikasi Android resmi)
+* 💻 **Windows PC:** `MYSFTP-v2.0.3-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.0.3.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).

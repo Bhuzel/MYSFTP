@@ -690,7 +690,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v202");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v203");
             }
             catch { }
 
@@ -2012,7 +2012,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.2 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.3 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
