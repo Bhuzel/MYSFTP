@@ -1,27 +1,28 @@
-# MYSFTP v2.0.4 — SSH Connection Multiplexing & Instant Socket Engine
+# MYSFTP v2.0.5 — Streamlined High-Performance & Universal Linux Suite
 
-## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.4
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.5
 
-### 1. ⚡ SSH Connection Multiplexing (`ControlMaster` & `ControlPersist`)
-- **Shared Multiplexed Socket:** Seluruh panggilan `ssh.exe` selama satu sesi koneksi kini berbagi satu socket kontrol terpusat (`-o ControlMaster=auto -o ControlPath=... -o ControlPersist=10m`).
-- **Zero Handshake Cost:** Panggilan pertama melakukan autentikasi awal dan membuka socket kontrol; seluruh aksi navigasi, listing folder, read/write berkas, dan eksekusi command setelahnya langsung menumpang pada socket yang sama tanpa perlu mengulang TCP 3-way handshake dan negosiasi key SSH dari nol.
-- **Graceful Socket Teardown:** Saat koneksi diputuskan atau aplikasi ditutup, socket multiplexing dimatikan secara bersih melalui `-O exit`.
+### 1. ⚡ Streamlined Direct SSH Execution & AskPass In-Memory Caching
+- **Direct Robust Execution:** Menjaga keandalan maksimal eksekusi SSH mandiri yang kompatibel penuh dengan seluruh versi Windows OpenSSH bawaan tanpa dependensi socket Unix domain (`AF_UNIX`).
+- **Zero-Disk-Churn AskPass Caching:** Autentikasi SSH di-cache selama sesi aktif tanpa disk churn berulang, menghilangkan intervensi antivirus/Windows Defender.
+- **Optimistic In-Memory Directory Cache:** Navigasi folder bolak-balik tampil seketika (**0ms**) dan di-refresh di latar belakang.
 
-### 2. ⚡ Ultra-Fast Directory Navigation & Zero-Disk-Churn
-- **AskPass Caching:** Menghilangkan pembuatan/penghapusan file temporer berulang di disk pada setiap command SSH, menghapus latency scan Windows Defender sehingga membuka server dan folder terasa sangat cepat.
-- **Optimistic In-Memory Directory Cache:** Folder yang sudah pernah dibuka akan ditampilkan seketika (**0ms**) saat navigasi bolak-balik, lalu secara cerdas di-refresh di latar belakang.
+### 2. 🌐 Universal Multi-Format Linux Directory Parser
+- Mendukung 100% seluruh format `ls` Linux (POSIX standard, BusyBox/Alpine tanpa group, GNU ISO `--time-style=long-iso`, file berspasi, symlink, dan hidden files).
+- Direktori `/root` dan subfolder terbaca secara konsisten dan akurat.
 
-### 3. 🌐 Universal Multi-Format Linux Directory Parser
-- Menggunakan parser cerdas multi-format yang kompatibel 100% dengan semua distro Linux (Debian, Ubuntu, CentOS, RHEL, Alpine, BusyBox, OpenWrt, Arch, BSD, macOS, dll.).
-- Menjamin seluruh direktori (termasuk `/root`) terbaca lengkap tanpa masalah parsing kolom atau locale bahasa.
-
-### 4. 🗜️ Robust In-Memory ZIP Archiving Engine
-- Header dan Central Directory ZIP diselaraskan secara konsisten sesuai standar PKWare, mencegah korupsi file 0-byte.
-- Semua nama berkas/folder berspasi di-quote secara aman `'...'` saat pengompresan batch atau folder tunggal.
+### 3. 🗜️ Solid In-Memory ZIP Archiving Engine
+- Kompresi ZIP PKWare murni in-memory tanpa dependensi paket `zip` Linux.
+- Header dan Central Directory diselaraskan untuk mencegah berkas 0-byte corrupt.
 
 ---
 
-# MYSFTP v2.0.3 — High-Performance & Universal Linux Suite
+# MYSFTP v2.0.4 — High-Performance Suite
+- Eksperimen Connection multiplexing dan pembaruan versi.
+
+---
+
+# MYSFTP v2.0.3 — Universal Directory Parser & Fast Navigation
 - Optimalisasi askpass caching, universal directory parser, dan instant optimistic cache.
 
 ---
@@ -37,8 +38,8 @@
 ---
 
 ## 📦 File Rilis Resmi (Clean Single Assets):
-* 💻 **Windows PC:** `MYSFTP-v2.0.4-Setup.exe` (Installer tunggal resmi)
-* 📱 **Android:** `MYSFTP-v2.0.4.apk` (Aplikasi Android resmi)
+* 💻 **Windows PC:** `MYSFTP-v2.0.5-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.0.5.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).
