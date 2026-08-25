@@ -1,9 +1,9 @@
 <div align="center">
 
-# ⚡ MYSFTP (v2.1.0 — Universal Tar.Gz Archive Streaming & Non-Blocking Terminal Core)
+# ⚡ MYSFTP (v2.1.1 — Persistent Terminal Directory & Seamless CD Navigation)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
-*Engineered for Public Release with Luxury Dark Gold Aesthetics, Universal Tar.Gz Streaming & Non-Blocking SSH Engine by **ZellRayy***
+*Engineered for Public Release with Luxury Dark Gold Aesthetics, Stateful Terminal Navigation & Universal Tar.Gz Streaming by **ZellRayy***
 
 ---
 
@@ -48,11 +48,12 @@
 
 ---
 
-## 🌟 Fitur Unggulan (v2.1.0)
+## 🌟 Fitur Unggulan (v2.1.1)
 
-### 💻 1. Windows Desktop Suite (`MYSFTP-v2.1.0-Setup.exe`)
+### 💻 1. Windows Desktop Suite (`MYSFTP-v2.1.1-Setup.exe`)
+* **💻 Stateful Terminal Directory Navigation (`cd`)**: Terminal monospace SSH kini melacak direktori kerja secara persisten. Navigasi folder dengan `cd folder`, `cd ..`, `cd /path` langsung mengubah lokasi kerja dan memperbarui prompt aktif (misal: `root@host:~/ProjectBot#`).
 * **🗜️ Universal Tar.Gz Archive Streaming**: Mengunduh folder atau banyak berkas terpilih langsung dikompresi menggunakan format universal `.tar.gz` yang didukung 100% di semua server Linux, tanpa dependensi zip, dan dialirkan via socket SFTP stream 64KB.
-* **💻 SSH Termius Console Anti-Timeout**: Terminal monospace interaktif dengan stream reader dinamis. Menampilkan log instan untuk `pm2 logs`, `ls -la`, `df -h`, `pm2 status`, dll. tanpa timeout 30 detik.
+* **💻 SSH Termius Console Anti-Timeout**: Terminal monospace interaktif dengan stream reader dinamis. Menampilkan log instan untuk `pm2 logs`, `ls -la`, `df -h`, `pm2 status`, dll. tanpa freeze.
 * **⚡ Self-Contained Native SSH.NET Core**: Menggunakan library `Renci.SshNet` murni tanpa dependensi eksternal — 100% plug and play di seluruh edisi Windows.
 * **🌐 Pure SFTP Directory Protocol (`SSH_FXP_READDIR`)**: Listing berkas/folder remote langsung dari kanal SFTP biner dengan atribut objek asli (`SftpFile`), bebas dari parsing regex `ls`.
 * **📁 Clean Relative Folder Extraction**: Saat mengunduh folder remote, isi file arsip hanya berisi folder target langsung tanpa rantai path parent yang panjang.
@@ -62,7 +63,7 @@
 * **✏️ Pro Code Editor**: Editor kode terintegrasi dengan shortcut keyboard **`Ctrl+S`** untuk menyimpan berkas langsung ke server remote via SFTP socket.
 * **📦 Dedicated NSIS Installer**: Installer resmi tunggal lengkap dengan dependency `Renci.SshNet.dll`, Start Menu shortcut, dan terdaftar di Add/Remove Programs.
 
-### 📱 2. Android Mobile App (`MYSFTP-v2.1.0.apk`)
+### 📱 2. Android Mobile App (`MYSFTP-v2.1.1.apk`)
 * **Spacious Single-Pane Explorer**: Tampilan direktori remote yang lapang dan responsif.
 * **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto-scroll dan drag-and-copy.
 * **OTA Auto Updates**: Otomatis mendeteksi update terbaru dari GitHub repository.
@@ -72,14 +73,14 @@
 ## 🚀 Quick Start
 
 ### 🖥️ Windows PC / Laptop
-1. Unduh **`MYSFTP-v2.1.0-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.1.1-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Jalankan file installer dan selesaikan langkah instalasi.
 3. Buka **MYSFTP** dari Start Menu atau Desktop.
 4. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
 5. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah/mengunduh folder, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
-1. Unduh **`MYSFTP-v2.1.0.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.1.1.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Pasang APK pada perangkat Android Anda.
 
 ---
@@ -101,5 +102,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v2.1.0 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v2.1.1 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>

@@ -214,7 +214,79 @@ namespace MYSFTP
             }
         }
 
-        // ── Direct Streaming File & Directory Downloads ──
+        private string currentTerminalDir = "/root";
+
+        public string CurrentTerminalDir
+        {
+            get { return string.IsNullOrEmpty(currentTerminalDir) ? "/root" : currentTerminalDir; }
+            set { currentTerminalDir = value; }
+        }
+
+        public string RunTerminalCommand(string command, out string newWorkingDir, int timeoutMs = 15000)
+        {
+            newWorkingDir = CurrentTerminalDir;
+            if (!EnsureConnected())
+                return string.IsNullOrEmpty(lastConnectError) ? "Belum terhubung ke SSH" : lastConnectError;
+
+            try
+            {
+                string cmdTrim = (command ?? "").Trim();
+                if (string.IsNullOrEmpty(cmdTrim)) return "";
+
+                if (cmdTrim == "pm2 logs")
+                {
+                    cmdTrim = "pm2 logs --lines 50 --nostream 2>&1";
+                }
+                else if (cmdTrim.StartsWith("pm2 logs") && !cmdTrim.Contains("--nostream"))
+                {
+                    cmdTrim += " --nostream 2>&1";
+                }
+
+                string curDir = CurrentTerminalDir;
+                string pwdMarker = "___MYSFTP_DIR___";
+
+                string fullCmd;
+                if (!string.IsNullOrEmpty(curDir))
+                {
+                    fullCmd = "cd '" + EscapeShell(curDir) + "' 2>/dev/null; " + cmdTrim + "; echo ''; echo '" + pwdMarker + "'; pwd";
+                }
+                else
+                {
+                    fullCmd = cmdTrim + "; echo ''; echo '" + pwdMarker + "'; pwd";
+                }
+
+                string rawOutput = RunCommand(fullCmd, timeoutMs);
+
+                int markerIdx = rawOutput.IndexOf(pwdMarker);
+                if (markerIdx >= 0)
+                {
+                    string cleanOutput = rawOutput.Substring(0, markerIdx).Trim();
+                    string dirPart = rawOutput.Substring(markerIdx + pwdMarker.Length).Trim();
+                    string[] lines = dirPart.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (lines.Length > 0 && !string.IsNullOrEmpty(lines[0]) && lines[0].StartsWith("/"))
+                    {
+                        currentTerminalDir = lines[0].Trim();
+                        newWorkingDir = currentTerminalDir;
+                    }
+
+                    if (string.IsNullOrEmpty(cleanOutput))
+                    {
+                        if (cmdTrim.StartsWith("cd ") || cmdTrim == "cd")
+                        {
+                            return "";
+                        }
+                        return "(Perintah selesai dijalankan)";
+                    }
+                    return cleanOutput;
+                }
+
+                return rawOutput.Trim();
+            }
+            catch (Exception ex)
+            {
+                return "SSH Error: " + ex.Message;
+            }
+        }
 
         public IEnumerable<Renci.SshNet.Sftp.SftpFile> ListDirectory(string path)
         {
@@ -481,7 +553,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v210");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v211");
             }
             catch { }
 
@@ -896,8 +968,9 @@ namespace MYSFTP
 
                     if (activeProtocol == "SFTP" && sshManager.IsConnected)
                     {
-                        string output = sshManager.RunCommand(cmd, 30000);
-                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(output) + "\"}");
+                        string newDir;
+                        string output = sshManager.RunTerminalCommand(cmd, out newDir, 25000);
+                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(output) + "\",\"cwd\":\"" + EscapeJson(newDir) + "\"}");
                     }
                     else
                     {
@@ -913,7 +986,7 @@ namespace MYSFTP
                         Process p = Process.Start(psi);
                         string outStr = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
                         p.WaitForExit(5000);
-                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\"}");
+                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(outStr) + "\",\"cwd\":\"\"}");
                     }
                 }
                 else if (path == "/api/terminal/poll")
@@ -1741,7 +1814,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.1.0 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.1.1 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2270,6 +2343,7 @@ namespace MYSFTP
           connProfile = p;
           closeOv('ov-connect');
 
+          termCwd = '~';
           document.getElementById('sb-lbl').textContent = p.name;
           document.getElementById('pulse-dot').classList.add('live');
           document.getElementById('conn-bar').classList.add('on');
@@ -2304,6 +2378,7 @@ namespace MYSFTP
       fetch('/api/disconnect',{method:'POST'}).then(function() {
         connected = false;
         connProfile = null;
+        termCwd = '~';
         fsCache = {};
         stopTermPoll();
         document.getElementById('sb-lbl').textContent = 'Offline';
@@ -2861,6 +2936,8 @@ namespace MYSFTP
       tExec();
     }
 
+    var termCwd = '~';
+
     function tExec() {
       var inp = document.getElementById('tinp');
       var cmd = inp.value;
@@ -2877,14 +2954,28 @@ namespace MYSFTP
       termHistory.push(cmd);
       termHistPos = termHistory.length;
 
-      var pfx = (connProfile ? connProfile.username + '@' + connProfile.host : 'root') + ':~# ';
-      tPrint('\r\n\x1b[33m' + pfx + esc(cmd) + '\x1b[0m\r\n');
+      var promptHost = connProfile ? (connProfile.username + '@' + connProfile.host) : 'root';
+      var promptStr = promptHost + ':' + termCwd + '# ';
+      tPrint('\r\n\x1b[33m' + promptStr + esc(cmd) + '\x1b[0m\r\n');
 
       fetch('/api/terminal/exec', {
         method: 'POST',
         headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify({ command: cmd })
       }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d && d.cwd) {
+          var full = d.cwd;
+          if (full === '/root' || full === '/home/root') termCwd = '~';
+          else if (full.startsWith('/root/')) termCwd = '~/' + full.substring(6);
+          else if (full.startsWith('/home/' + (connProfile ? connProfile.username : ''))) {
+            var homePfx = '/home/' + (connProfile ? connProfile.username : '');
+            termCwd = '~' + full.substring(homePfx.length);
+          } else {
+            termCwd = full;
+          }
+          document.getElementById('tprompt').textContent = promptHost + ':' + termCwd + '#';
+        }
+
         if (d && d.output) {
           tPrint(d.output + '\r\n');
         } else if (d && d.error) {
