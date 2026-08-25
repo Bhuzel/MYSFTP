@@ -13,8 +13,8 @@ android {
         applicationId = "com.yoursftp.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 27
-        versionName = "2.0.7"
+        versionCode = 28
+        versionName = "2.0.8"
         vectorDrawables { useSupportLibrary = true }
     }
 

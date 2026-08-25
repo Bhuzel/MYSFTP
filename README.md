@@ -1,9 +1,9 @@
 <div align="center">
 
-# ⚡ MYSFTP (v2.0.7 — Self-Contained SSH.NET & Persistent Session Core)
+# ⚡ MYSFTP (v2.0.8 — SSH Termius Terminal Real-Time Engine Fix)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
-*Engineered for Public Release with Luxury Dark Gold Aesthetics, Self-Contained Native SSH.NET Core by **ZellRayy***
+*Engineered for Public Release with Luxury Dark Gold Aesthetics, Real-Time SSH Terminal & Self-Contained Native SSH.NET Core by **ZellRayy***
 
 ---
 
@@ -48,21 +48,21 @@
 
 ---
 
-## 🌟 Fitur Unggulan (v2.0.7)
+## 🌟 Fitur Unggulan (v2.0.8)
 
-### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.7-Setup.exe`)
-* **⚡ Self-Contained Native SSH.NET Core**: Menggunakan library `Renci.SshNet` murni tanpa dependensi eksternal (`Microsoft.Bcl.AsyncInterfaces`, dll.) — 100% plug and play di seluruh edisi Windows.
+### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.8-Setup.exe`)
+* **💻 SSH Termius Console Real-Time**: Terminal monospace interaktif ditenagai oleh `ShellStream` dengan thread pembaca stream non-blocking mandiri dan tombol **`🛑 Ctrl+C`** responsif.
+* **⚡ Self-Contained Native SSH.NET Core**: Menggunakan library `Renci.SshNet` murni tanpa dependensi eksternal — 100% plug and play di seluruh edisi Windows.
 * **🌐 Pure SFTP Directory Protocol (`SSH_FXP_READDIR`)**: Listing berkas/folder remote langsung dari kanal SFTP biner dengan atribut objek asli (`SftpFile`), bebas dari parsing regex `ls`.
 * **🗜️ Solid In-Memory ZIP Archiving**: Mengunduh folder tunggal atau banyak berkas terpilih (multi-select batch) secara biner tanpa Base64 overhead, menghasilkan `.zip` valid standar PKWare.
 * **📁 Clean Relative Folder Extraction**: Saat mengunduh folder remote, isi file ZIP hanya berisi folder target langsung tanpa rantai path parent yang panjang.
 * **🎨 Luxury Glassmorphism Modals**: Bebas dari pop-up browser bawaan (`127.0.0.1 says...`). Semua pop-up konfirmasi dan input menggunakan tema dark gold transparan yang elegan.
 * **📁 Upload Folder & Drag & Drop Rekursif**: Tombol **`📁 Upload Folder`** dan area drag & drop memungkinkan transfer folder lengkap secara rekursif.
 * **🗂️ Multi-Select & Batch Actions**: Checkbox pilihan di setiap baris dan header tabel untuk menghapus atau mengunduh banyak berkas sekaligus dalam 1 kali klik.
-* **💻 SSH Termius Console Bebas Duplikasi**: Terminal monospace interaktif ditenagai oleh `ShellStream` terintegrasi dengan tombol **`🛑 Ctrl+C`** responsif.
 * **✏️ Pro Code Editor**: Editor kode terintegrasi dengan shortcut keyboard **`Ctrl+S`** untuk menyimpan berkas langsung ke server remote via SFTP socket.
 * **📦 Dedicated NSIS Installer**: Installer resmi tunggal lengkap dengan dependency `Renci.SshNet.dll`, Start Menu shortcut, dan terdaftar di Add/Remove Programs.
 
-### 📱 2. Android Mobile App (`MYSFTP-v2.0.7.apk`)
+### 📱 2. Android Mobile App (`MYSFTP-v2.0.8.apk`)
 * **Spacious Single-Pane Explorer**: Tampilan direktori remote yang lapang dan responsif.
 * **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto-scroll dan drag-and-copy.
 * **OTA Auto Updates**: Otomatis mendeteksi update terbaru dari GitHub repository.
@@ -72,14 +72,14 @@
 ## 🚀 Quick Start
 
 ### 🖥️ Windows PC / Laptop
-1. Unduh **`MYSFTP-v2.0.7-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.0.8-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Jalankan file installer dan selesaikan langkah instalasi.
 3. Buka **MYSFTP** dari Start Menu atau Desktop.
 4. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
 5. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah/mengunduh folder, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
-1. Unduh **`MYSFTP-v2.0.7.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.0.8.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Pasang APK pada perangkat Android Anda.
 
 ---
@@ -101,5 +101,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v2.0.7 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v2.0.8 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>

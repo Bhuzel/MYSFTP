@@ -1,14 +1,17 @@
+# MYSFTP v2.0.8 — SSH Termius Terminal Real-Time Engine Fix
+
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.8
+
+### 1. 💻 Terminal SSH Termius Berjalan 100% Real-Time
+- **Dedicated Background Reader Thread:** Terminal SSH kini dilengkapi dengan thread pembaca stream non-blocking mandiri yang terus-menerus membaca dan mengalirkan setiap byte output dari server secara instan ke layar terminal.
+- **Auto-Flush & LF Formatting:** Setiap perintah yang diketik langsung di-encode UTF-8, diakhiri baris baru standar Linux (`\n`), dan di-flush seketika lewat socket stream PTY.
+- **Auto-Recovery & Fallback:** Apabila stream interaktif terputus, backend otomatis memulihkan sesi atau menjalankan perintah via mode `RunCommand` tanpa kehilangan output.
+- **Visual Feedback Instan:** Setiap perintah yang diketik atau dipilih via chip (seperti `pm2 status`, `ls -la`, dll.) langsung ditampilkan di layar bersama respon server.
+
+---
+
 # MYSFTP v2.0.7 — Hotfix Self-Contained SSH.NET Engine
-
-## ✨ Apa yang Baru & Diperbaiki di Versi 2.0.7
-
-### 1. 🛡️ Hotfix: Eliminasi Error `Microsoft.Bcl.AsyncInterfaces`
-- **Penyebab:** Pada paket SSH.NET modern tertentu (net462), terdapat dependensi eksternal terhadap DLL `Microsoft.Bcl.AsyncInterfaces`, `System.Threading.Tasks.Extensions`, dan `System.Runtime.CompilerServices.Unsafe` yang menyebabkan crash `Could not load file or assembly` saat aplikasi dijalankan di PC Windows.
-- **Solusi:** Menggunakan library `Renci.SshNet.dll` (net40) murni yang **100% self-contained tanpa dependensi eksternal apapun**, langsung berjalan mulus di seluruh PC Windows (Windows 10, 11, 8.1, 7).
-
-### 2. ⚡ Native SSH.NET & Persistent SFTP Session
-- Satu koneksi persisten untuk seluruh aktivitas browser berkas, editor, dan terminal SSH.
-- Navigasi folder instan dengan protokol biner `SSH_FXP_READDIR` tanpa proses `ssh.exe` berulang.
+- Eliminasi error `Microsoft.Bcl.AsyncInterfaces` dengan paket self-contained .NET 4.0 murni.
 
 ---
 
@@ -17,14 +20,9 @@
 
 ---
 
-# MYSFTP v2.0.5 — Universal Linux Suite
-- Optimalisasi askpass caching dan universal directory parser.
-
----
-
 ## 📦 File Rilis Resmi (Clean Single Assets):
-* 💻 **Windows PC:** `MYSFTP-v2.0.7-Setup.exe` (Installer tunggal resmi)
-* 📱 **Android:** `MYSFTP-v2.0.7.apk` (Aplikasi Android resmi)
+* 💻 **Windows PC:** `MYSFTP-v2.0.8-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.0.8.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).

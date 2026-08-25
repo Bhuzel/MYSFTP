@@ -159,6 +159,7 @@ namespace MYSFTP
         private StringBuilder interactiveBuffer = new StringBuilder();
         private object interactiveLock = new object();
         private volatile bool interactiveAlive;
+        private Thread interactiveReadThread;
 
         public bool IsInteractiveAlive { get { return interactiveAlive && shellStream != null; } }
 
@@ -171,39 +172,88 @@ namespace MYSFTP
             {
                 lock (interactiveLock) { interactiveBuffer.Clear(); }
 
-                shellStream = sshClient.CreateShellStream("xterm-256color", 80, 24, 800, 600, 4096);
+                shellStream = sshClient.CreateShellStream("xterm-256color", 100, 30, 800, 600, 4096);
                 interactiveAlive = true;
 
-                shellStream.DataReceived += (s, e) =>
+                interactiveReadThread = new Thread(new ThreadStart(InteractiveReaderLoop))
                 {
-                    try
-                    {
-                        string chunk = Encoding.UTF8.GetString(e.Data);
-                        lock (interactiveLock) { interactiveBuffer.Append(chunk); }
-                    }
-                    catch { }
+                    IsBackground = true,
+                    Name = "TerminalReader"
                 };
-                shellStream.ErrorOccurred += (s, e) => { interactiveAlive = false; };
+                interactiveReadThread.Start();
             }
-            catch
+            catch (Exception ex)
             {
                 interactiveAlive = false;
                 shellStream = null;
+                lock (interactiveLock)
+                {
+                    interactiveBuffer.Append("\r\n[Shell Error: " + ex.Message + "]\r\n");
+                }
             }
+        }
+
+        private void InteractiveReaderLoop()
+        {
+            byte[] buf = new byte[4096];
+            while (interactiveAlive && shellStream != null)
+            {
+                try
+                {
+                    int n = shellStream.Read(buf, 0, buf.Length);
+                    if (n > 0)
+                    {
+                        string s = Encoding.UTF8.GetString(buf, 0, n);
+                        lock (interactiveLock)
+                        {
+                            interactiveBuffer.Append(s);
+                        }
+                    }
+                    else
+                    {
+                        Thread.Sleep(30);
+                    }
+                }
+                catch
+                {
+                    break;
+                }
+            }
+            interactiveAlive = false;
         }
 
         public void SendInteractiveLine(string text)
         {
-            if (!IsInteractiveAlive) return;
-            try { shellStream.WriteLine(text); }
-            catch { interactiveAlive = false; }
+            if (!IsInteractiveAlive)
+            {
+                StartInteractiveShell();
+            }
+            if (shellStream == null) return;
+            try
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(text + "\n");
+                shellStream.Write(bytes, 0, bytes.Length);
+                shellStream.Flush();
+            }
+            catch
+            {
+                interactiveAlive = false;
+            }
         }
 
-        public void SendInteractiveRaw(char c)
+        public void SendInteractiveRaw(string text)
         {
-            if (!IsInteractiveAlive) return;
-            try { shellStream.Write(c.ToString()); }
-            catch { interactiveAlive = false; }
+            if (shellStream == null) return;
+            try
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(text);
+                shellStream.Write(bytes, 0, bytes.Length);
+                shellStream.Flush();
+            }
+            catch
+            {
+                interactiveAlive = false;
+            }
         }
 
         public string PollInteractiveOutput()
@@ -224,22 +274,32 @@ namespace MYSFTP
                 try { shellStream.Dispose(); } catch { }
             }
             shellStream = null;
+            if (interactiveReadThread != null && interactiveReadThread.IsAlive)
+            {
+                try { interactiveReadThread.Abort(); } catch { }
+            }
+            interactiveReadThread = null;
         }
 
         public void BreakInteractive()
         {
             try
             {
-                if (IsInteractiveAlive)
+                if (IsInteractiveAlive && shellStream != null)
                 {
-                    try { shellStream.Write("\x03"); } catch { }
+                    byte[] ctrlC = new byte[] { 3 };
+                    shellStream.Write(ctrlC, 0, ctrlC.Length);
+                    shellStream.Flush();
                 }
-                // Only the shell channel is torn down and reopened here -
-                // the underlying SSH connection (and its handshake) stays put.
-                StopInteractiveShell();
+                else
+                {
+                    StartInteractiveShell();
+                }
+            }
+            catch
+            {
                 StartInteractiveShell();
             }
-            catch { }
         }
 
         // ── File I/O over the persistent SFTP channel (no more base64-over-exec) ──
@@ -566,7 +626,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v207");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v208");
             }
             catch { }
 
@@ -981,6 +1041,12 @@ namespace MYSFTP
 
                     if (activeProtocol == "SFTP" && sshManager.IsConnected)
                     {
+                        if (!sshManager.IsInteractiveAlive)
+                        {
+                            sshManager.StartInteractiveShell();
+                            Thread.Sleep(80);
+                        }
+
                         if (sshManager.IsInteractiveAlive)
                         {
                             sshManager.SendInteractiveLine(cmd);
@@ -1824,7 +1890,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.7 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.8 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2960,6 +3026,11 @@ namespace MYSFTP
       termHistory.push(cmd);
       termHistPos = termHistory.length;
 
+      // Print command immediately for prompt visual feedback
+      tPrint('\r\n\x1b[33m> ' + esc(cmd) + '\x1b[0m\r\n');
+
+      startTermPoll();
+
       fetch('/api/terminal/exec', {
         method: 'POST',
         headers: {'Content-Type':'application/json; charset=utf-8'},
@@ -2974,14 +3045,15 @@ namespace MYSFTP
     }
 
     function startTermPoll() {
-      stopTermPoll();
+      if (termStreamPoll) return;
       termStreamPoll = setInterval(function() {
+        if (curView !== 'term' && !connected) return;
         fetch('/api/terminal/poll')
           .then(function(r){return r.json();})
           .then(function(d) {
-            if (d.output) tPrint(d.output);
+            if (d && d.output) tPrint(d.output);
           }).catch(function() {});
-      }, 120);
+      }, 80);
     }
 
     function stopTermPoll() {
