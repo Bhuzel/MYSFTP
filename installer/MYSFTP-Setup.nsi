@@ -9,7 +9,7 @@
 
 !define APP_NAME        "MYSFTP"
 !define APP_PUBLISHER   "ZellRayy"
-!define APP_VERSION     "2.0.5"
+!define APP_VERSION     "2.0.6"
 !define APP_EXE         "MYSFTP.exe"
 !define UNINST_KEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 
@@ -58,6 +58,7 @@ Section "MYSFTP Desktop Suite (required)" SEC_CORE
   SetOutPath "$INSTDIR"
 
   File "files\${APP_EXE}"
+  File "files\Renci.SshNet.dll"
   File "files\app.ico"
   File "files\Icon.jpg"
 
@@ -96,6 +97,7 @@ SectionEnd
 ; =========================================================================
 Section "Uninstall"
   Delete "$INSTDIR\${APP_EXE}"
+  Delete "$INSTDIR\Renci.SshNet.dll"
   Delete "$INSTDIR\app.ico"
   Delete "$INSTDIR\Icon.jpg"
   Delete "$INSTDIR\connections.json"

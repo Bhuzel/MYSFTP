@@ -7,25 +7,32 @@ using System.Threading;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+// SSH.NET - single persistent SSH session instead of spawning ssh.exe per action.
+// See Renci.SshNet.dll reference note in README / build script.
 
 namespace MYSFTP
 {
     class SshManager
     {
-        private Process activeStreamingProcess;
-        private string askpassPath;
+        // ── Persistent connection state ──────────────────────────────────
+        // One SshClient (exec channel) + one SftpClient (file channel), both
+        // opened ONCE per Connect() call and kept alive for the whole session.
+        // Every subsequent action (ls, get, put, mkdir, rm, ...) reuses the
+        // same TCP connection + already-negotiated SSH session instead of
+        // spawning a brand new ssh.exe process and doing a full handshake.
+        private Renci.SshNet.SshClient sshClient;
+        private Renci.SshNet.SftpClient sftpClient;
         private string host;
         private int port;
         private string user;
         private string password;
         private bool connected;
-        private object streamLock = new object();
-        private StringBuilder streamOutput = new StringBuilder();
+        private string lastConnectError;
 
         [DllImport("shell32.dll", SetLastError = true)]
         public static extern void SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string AppID);
 
-        public bool IsConnected { get { return connected; } }
+        public bool IsConnected { get { return connected && sshClient != null && sshClient.IsConnected; } }
         public string Host { get { return host; } }
         public int Port { get { return port; } }
         public string User { get { return user; } }
@@ -34,68 +41,110 @@ namespace MYSFTP
         {
             Disconnect();
             host = h; port = p; user = u; password = pw;
+            lastConnectError = null;
 
-            askpassPath = Path.Combine(Path.GetTempPath(), "mysftp_ap_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
-            string escapedPw = pw.Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
-                                 .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
-                                 .Replace("\"", "^\"");
-            File.WriteAllText(askpassPath, "@echo off\r\necho " + escapedPw + "\r\n");
+            try
+            {
+                Renci.SshNet.ConnectionInfo connInfo = BuildConnectionInfo(h, p, u, pw);
 
-            connected = true;
+                sshClient = new Renci.SshNet.SshClient(connInfo);
+                // Parity with the previous "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL"
+                // behaviour: accept whatever host key the server presents.
+                sshClient.HostKeyReceived += (s, e) => { e.CanTrust = true; };
+                sshClient.Connect();
+                // Keeps NAT/firewalls from silently dropping an idle session -
+                // this is what actually fixes the "flaky on real connections" issue,
+                // since we no longer re-handshake for every click.
+                sshClient.KeepAliveInterval = TimeSpan.FromSeconds(15);
+
+                sftpClient = new Renci.SshNet.SftpClient(connInfo);
+                sftpClient.HostKeyReceived += (s, e) => { e.CanTrust = true; };
+                sftpClient.Connect();
+
+                connected = true;
+            }
+            catch (Exception ex)
+            {
+                connected = false;
+                lastConnectError = "SSH Error: " + ex.Message;
+                try { if (sshClient != null) sshClient.Dispose(); } catch { }
+                try { if (sftpClient != null) sftpClient.Dispose(); } catch { }
+                sshClient = null;
+                sftpClient = null;
+            }
         }
 
-        private string GetOrCreateAskPass()
+        private static Renci.SshNet.ConnectionInfo BuildConnectionInfo(string h, int p, string u, string pw)
         {
-            if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
-                return askpassPath;
-            askpassPath = Path.Combine(Path.GetTempPath(), "mysftp_ap_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
-            string escapedPw = (password ?? "").Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
-                                              .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
-                                              .Replace("\"", "^\"");
-            File.WriteAllText(askpassPath, "@echo off\r\necho " + escapedPw + "\r\n");
-            return askpassPath;
+            // Offer both "password" and "keyboard-interactive" auth, same as the
+            // old `ssh -o BatchMode=no` + SSH_ASKPASS combo, so servers that only
+            // accept keyboard-interactive (common on some VPS/hardened images)
+            // still work.
+            Renci.SshNet.PasswordAuthenticationMethod pwAuth =
+                new Renci.SshNet.PasswordAuthenticationMethod(u, pw);
+
+            Renci.SshNet.KeyboardInteractiveAuthenticationMethod kbdAuth =
+                new Renci.SshNet.KeyboardInteractiveAuthenticationMethod(u);
+            kbdAuth.AuthenticationPrompt += (sender, e) =>
+            {
+                foreach (Renci.SshNet.Common.AuthenticationPrompt prompt in e.Prompts)
+                {
+                    if (prompt.Request.IndexOf("password", StringComparison.OrdinalIgnoreCase) >= 0 || !prompt.IsEchoed)
+                        prompt.Response = pw;
+                }
+            };
+
+            Renci.SshNet.ConnectionInfo info = new Renci.SshNet.ConnectionInfo(h, p, u, pwAuth, kbdAuth);
+            info.Timeout = TimeSpan.FromSeconds(15);
+            info.RetryAttempts = 2;
+            return info;
+        }
+
+        // Makes sure the persistent channels are still up before an action;
+        // if the TCP session dropped (VPS hiccup, packet loss, sleep/resume),
+        // transparently reconnects using the credentials from the last
+        // successful Connect() instead of failing the whole action.
+        private bool EnsureConnected()
+        {
+            if (!connected || sshClient == null) return false;
+            try
+            {
+                if (!sshClient.IsConnected) sshClient.Connect();
+                if (sftpClient != null && !sftpClient.IsConnected) sftpClient.Connect();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                lastConnectError = "SSH Error: " + ex.Message;
+                connected = false;
+                return false;
+            }
         }
 
         public string RunCommand(string command, int timeoutMs = 8000)
         {
-            if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
+            if (!EnsureConnected())
+                return string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError;
 
-            string apPath = GetOrCreateAskPass();
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -o BatchMode=no -o Compression=no -o TCPKeepAlive=yes -p " + port + " " + user + "@" + host + " " + command;
-                psi.UseShellExecute = false;
-                psi.RedirectStandardInput = true;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.CreateNoWindow = true;
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
-                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-                psi.EnvironmentVariables["DISPLAY"] = ":0";
-
-                Process p = Process.Start(psi);
-                try { p.StandardInput.Close(); } catch { }
-
-                StringBuilder outSb = new StringBuilder();
-                StringBuilder errSb = new StringBuilder();
-                p.OutputDataReceived += (s, ev) => { if (ev.Data != null) outSb.AppendLine(ev.Data); };
-                p.ErrorDataReceived += (s, ev) => { if (ev.Data != null) errSb.AppendLine(ev.Data); };
-                p.BeginOutputReadLine();
-                p.BeginErrorReadLine();
-
-                if (!p.WaitForExit(timeoutMs))
+                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(command))
                 {
-                    try { p.Kill(); } catch { }
-                    return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
+                    cmd.CommandTimeout = TimeSpan.FromMilliseconds(timeoutMs);
+                    string stdout;
+                    try
+                    {
+                        stdout = cmd.Execute();
+                    }
+                    catch (Renci.SshNet.Common.SshOperationTimeoutException)
+                    {
+                        return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
+                    }
+                    string stderr = cmd.Error;
+                    stdout = (stdout ?? "").Trim();
+                    stderr = (stderr ?? "").Trim();
+                    return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
                 }
-
-                string stdout = outSb.ToString().Trim();
-                string stderr = errSb.ToString().Trim();
-                return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
             }
             catch (Exception ex)
             {
@@ -103,148 +152,58 @@ namespace MYSFTP
             }
         }
 
-        public void StartStreamingCommand(string command)
-        {
-            StopStreaming();
-
-            string apPath = CreateAskPass();
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = FindSshExe();
-            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -p " + port + " " + user + "@" + host + " " + command;
-            psi.UseShellExecute = false;
-            psi.RedirectStandardInput = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.CreateNoWindow = true;
-            psi.StandardOutputEncoding = Encoding.UTF8;
-            psi.StandardErrorEncoding = Encoding.UTF8;
-            psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-            psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-            psi.EnvironmentVariables["DISPLAY"] = ":0";
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
-
-            lock (streamLock) { streamOutput.Clear(); }
-
-            activeStreamingProcess = Process.Start(psi);
-
-            Thread tOut = new Thread(() => {
-                try {
-                    char[] buf = new char[2048];
-                    int n;
-                    while (activeStreamingProcess != null && !activeStreamingProcess.HasExited && (n = activeStreamingProcess.StandardOutput.Read(buf, 0, buf.Length)) > 0) {
-                        string s = new string(buf, 0, n);
-                        lock (streamLock) { streamOutput.Append(s); }
-                    }
-                } catch { }
-            });
-            tOut.IsBackground = true;
-            tOut.Start();
-
-            Thread tErr = new Thread(() => {
-                try {
-                    char[] buf = new char[2048];
-                    int n;
-                    while (activeStreamingProcess != null && !activeStreamingProcess.HasExited && (n = activeStreamingProcess.StandardError.Read(buf, 0, buf.Length)) > 0) {
-                        string s = new string(buf, 0, n);
-                        lock (streamLock) { streamOutput.Append(s); }
-                    }
-                } catch { }
-            });
-            tErr.IsBackground = true;
-            tErr.Start();
-        }
-
-        public string GetStreamOutput()
-        {
-            lock (streamLock)
-            {
-                string result = streamOutput.ToString();
-                streamOutput.Clear();
-                return result;
-            }
-        }
-
-        public void StopStreaming()
-        {
-            if (activeStreamingProcess != null && !activeStreamingProcess.HasExited)
-            {
-                try { activeStreamingProcess.Kill(); } catch { }
-            }
-            activeStreamingProcess = null;
-        }
-
         // ── Persistent interactive shell (real Termius-style session) ──
-        private Process interactiveProcess;
-        private StreamWriter interactiveStdin;
+        // Backed by a single ShellStream multiplexed over the already-open
+        // SshClient connection - no second process, no second handshake.
+        private Renci.SshNet.ShellStream shellStream;
         private StringBuilder interactiveBuffer = new StringBuilder();
         private object interactiveLock = new object();
+        private volatile bool interactiveAlive;
 
-        public bool IsInteractiveAlive
-        {
-            get { return interactiveProcess != null && !interactiveProcess.HasExited; }
-        }
+        public bool IsInteractiveAlive { get { return interactiveAlive && shellStream != null; } }
 
         public void StartInteractiveShell()
         {
             StopInteractiveShell();
-            if (!connected || string.IsNullOrEmpty(host)) return;
+            if (!EnsureConnected()) return;
 
-            string apPath = CreateAskPass();
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = FindSshExe();
-            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p " + port + " " + user + "@" + host + " \"/bin/bash -i 2>&1 || sh -i 2>&1\"";
-            psi.UseShellExecute = false;
-            psi.RedirectStandardInput = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.CreateNoWindow = true;
-            psi.StandardOutputEncoding = Encoding.UTF8;
-            psi.StandardErrorEncoding = Encoding.UTF8;
-            psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-            psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-            psi.EnvironmentVariables["DISPLAY"] = ":0";
+            try
+            {
+                lock (interactiveLock) { interactiveBuffer.Clear(); }
 
-            lock (interactiveLock) { interactiveBuffer.Clear(); }
+                shellStream = sshClient.CreateShellStream("xterm-256color", 80, 24, 800, 600, 4096);
+                interactiveAlive = true;
 
-            interactiveProcess = Process.Start(psi);
-            interactiveStdin = interactiveProcess.StandardInput;
-
-            Thread tOut = new Thread(() => {
-                try {
-                    char[] buf = new char[4096];
-                    int n;
-                    while (interactiveProcess != null && !interactiveProcess.HasExited && (n = interactiveProcess.StandardOutput.Read(buf, 0, buf.Length)) > 0) {
-                        lock (interactiveLock) { interactiveBuffer.Append(buf, 0, n); }
+                shellStream.DataReceived += (s, e) =>
+                {
+                    try
+                    {
+                        string chunk = Encoding.UTF8.GetString(e.Data);
+                        lock (interactiveLock) { interactiveBuffer.Append(chunk); }
                     }
-                } catch { }
-                finally { try { File.Delete(apPath); } catch { } }
-            });
-            tOut.IsBackground = true;
-            tOut.Start();
-
-            Thread tErr = new Thread(() => {
-                try {
-                    char[] buf = new char[4096];
-                    int n;
-                    while (interactiveProcess != null && !interactiveProcess.HasExited && (n = interactiveProcess.StandardError.Read(buf, 0, buf.Length)) > 0) {
-                        lock (interactiveLock) { interactiveBuffer.Append(buf, 0, n); }
-                    }
-                } catch { }
-            });
-            tErr.IsBackground = true;
-            tErr.Start();
+                    catch { }
+                };
+                shellStream.ErrorOccurred += (s, e) => { interactiveAlive = false; };
+            }
+            catch
+            {
+                interactiveAlive = false;
+                shellStream = null;
+            }
         }
 
         public void SendInteractiveLine(string text)
         {
             if (!IsInteractiveAlive) return;
-            try { interactiveStdin.Write(text + "\n"); interactiveStdin.Flush(); } catch { }
+            try { shellStream.WriteLine(text); }
+            catch { interactiveAlive = false; }
         }
 
         public void SendInteractiveRaw(char c)
         {
             if (!IsInteractiveAlive) return;
-            try { interactiveStdin.Write(c); interactiveStdin.Flush(); } catch { }
+            try { shellStream.Write(c.ToString()); }
+            catch { interactiveAlive = false; }
         }
 
         public string PollInteractiveOutput()
@@ -259,12 +218,12 @@ namespace MYSFTP
 
         public void StopInteractiveShell()
         {
-            if (interactiveProcess != null)
+            interactiveAlive = false;
+            if (shellStream != null)
             {
-                try { if (!interactiveProcess.HasExited) interactiveProcess.Kill(); } catch { }
+                try { shellStream.Dispose(); } catch { }
             }
-            interactiveProcess = null;
-            interactiveStdin = null;
+            shellStream = null;
         }
 
         public void BreakInteractive()
@@ -273,85 +232,90 @@ namespace MYSFTP
             {
                 if (IsInteractiveAlive)
                 {
-                    try { interactiveStdin.Write("\x03\n"); interactiveStdin.Flush(); } catch { }
+                    try { shellStream.Write("\x03"); } catch { }
                 }
+                // Only the shell channel is torn down and reopened here -
+                // the underlying SSH connection (and its handshake) stays put.
                 StopInteractiveShell();
                 StartInteractiveShell();
             }
             catch { }
         }
 
+        // ── File I/O over the persistent SFTP channel (no more base64-over-exec) ──
+
+        // Native SFTP directory listing (SSH_FXP_READDIR) - one protocol
+        // round trip on the already-open channel, with real typed attributes,
+        // instead of shelling out to `ls -la` and regex-parsing text.
+        public IEnumerable<Renci.SshNet.Sftp.ISftpFile> ListDirectory(string path)
+        {
+            if (!EnsureConnected())
+                throw new InvalidOperationException(string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError);
+            return sftpClient.ListDirectory(path);
+        }
+
         public byte[] ReadRemoteBytes(string remotePath)
         {
-            if (!connected || string.IsNullOrEmpty(host)) return new byte[0];
-            string apPath = CreateAskPass();
+            if (!EnsureConnected()) return new byte[0];
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = FindSshExe();
-                string b64Cmd = "echo '___MYSFTP_B64_START___' && (base64 -w 0 '" + EscapeShell(remotePath) + "' 2>/dev/null || base64 '" + EscapeShell(remotePath) + "' 2>/dev/null || cat '" + EscapeShell(remotePath) + "') && echo '' && echo '___MYSFTP_B64_END___'";
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 -p " + port + " " + user + "@" + host + " \"" + b64Cmd + "\"";
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.CreateNoWindow = true;
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
-                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-                psi.EnvironmentVariables["DISPLAY"] = ":0";
-
-                Process p = Process.Start(psi);
-                string output = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(45000);
-                if (!p.HasExited) try { p.Kill(); } catch { }
-
-                int sIdx = output.IndexOf("___MYSFTP_B64_START___");
-                if (sIdx >= 0)
-                {
-                    sIdx += "___MYSFTP_B64_START___".Length;
-                    int eIdx = output.IndexOf("___MYSFTP_B64_END___", sIdx);
-                    if (eIdx >= 0)
-                        output = output.Substring(sIdx, eIdx - sIdx);
-                    else
-                        output = output.Substring(sIdx);
-                }
-
-                StringBuilder cleanB64 = new StringBuilder(output.Length);
-                for (int i = 0; i < output.Length; i++)
-                {
-                    char c = output[i];
-                    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=')
-                    {
-                        cleanB64.Append(c);
-                    }
-                }
-
-                if (cleanB64.Length == 0) return new byte[0];
-
-                try
-                {
-                    return Convert.FromBase64String(cleanB64.ToString());
-                }
-                catch
-                {
-                    return Encoding.UTF8.GetBytes(output.Trim());
-                }
+                return sftpClient.ReadAllBytes(remotePath);
             }
             catch
             {
                 return new byte[0];
             }
-            finally
+        }
+
+        public string WriteRemoteBytes(string remotePath, byte[] data)
+        {
+            if (!EnsureConnected()) return string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError;
+            try
             {
-                try { File.Delete(apPath); } catch { }
+                string rPath = remotePath.Replace('\\', '/');
+                int lastSlash = rPath.LastIndexOf('/');
+                string rDir = lastSlash > 0 ? rPath.Substring(0, lastSlash) : "/";
+                EnsureRemoteDirectory(rDir);
+
+                using (MemoryStream ms = new MemoryStream(data))
+                {
+                    sftpClient.UploadFile(ms, rPath, true);
+                }
+                return "";
+            }
+            catch (Exception ex)
+            {
+                return "SFTP Error: " + ex.Message;
+            }
+        }
+
+        // "mkdir -p" equivalent, since SftpClient.CreateDirectory only makes
+        // one level at a time and throws if the parent doesn't exist yet.
+        private void EnsureRemoteDirectory(string dir)
+        {
+            if (string.IsNullOrEmpty(dir) || dir == "/" || dir == ".") return;
+            dir = dir.Replace('\\', '/');
+            bool rooted = dir.StartsWith("/");
+            string[] parts = dir.Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+            StringBuilder path = new StringBuilder();
+            if (rooted) path.Append("/");
+            foreach (string part in parts)
+            {
+                if (path.Length > 0 && path[path.Length - 1] != '/') path.Append('/');
+                path.Append(part);
+                string p = path.ToString();
+                try
+                {
+                    if (!sftpClient.Exists(p)) sftpClient.CreateDirectory(p);
+                }
+                catch { /* race with another op / already exists - ignore */ }
             }
         }
 
         public byte[] ArchiveRemoteItems(List<string> paths)
         {
-            if (!connected || string.IsNullOrEmpty(host) || paths == null || paths.Count == 0) return new byte[0];
-            string apPath = CreateAskPass();
+            if (!EnsureConnected() || paths == null || paths.Count == 0) return new byte[0];
             try
             {
                 // Determine parent directory and relative items
@@ -389,60 +353,32 @@ namespace MYSFTP
                     if (!string.IsNullOrEmpty(rel)) itemsStr.Append(" '" + EscapeShell(rel) + "'");
                 }
 
-                string tarCmd = "echo '___MYSFTP_B64_START___' && cd '" + EscapeShell(parentDir) + "' && (tar -czf - " + itemsStr.ToString().Trim() + " 2>/dev/null | (base64 -w 0 2>/dev/null || base64 2>/dev/null)) && echo '' && echo '___MYSFTP_B64_END___'";
+                string tarCmd = "cd '" + EscapeShell(parentDir) + "' && tar -czf - " + itemsStr.ToString().Trim() + " 2>/dev/null";
 
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 -p " + port + " " + user + "@" + host + " \"" + tarCmd + "\"";
-                psi.UseShellExecute = false;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.CreateNoWindow = true;
-                psi.StandardOutputEncoding = Encoding.UTF8;
-                psi.StandardErrorEncoding = Encoding.UTF8;
-                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-                psi.EnvironmentVariables["DISPLAY"] = ":0";
-
-                Process proc = Process.Start(psi);
-                string output = proc.StandardOutput.ReadToEnd();
-                proc.WaitForExit(90000);
-                if (!proc.HasExited) try { proc.Kill(); } catch { }
-
-                int sIdx = output.IndexOf("___MYSFTP_B64_START___");
-                if (sIdx >= 0)
+                byte[] tarGzBytes;
+                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(tarCmd))
                 {
-                    sIdx += "___MYSFTP_B64_START___".Length;
-                    int eIdx = output.IndexOf("___MYSFTP_B64_END___", sIdx);
-                    if (eIdx >= 0)
-                        output = output.Substring(sIdx, eIdx - sIdx);
-                    else
-                        output = output.Substring(sIdx);
-                }
-
-                StringBuilder cleanB64 = new StringBuilder(output.Length);
-                for (int i = 0; i < output.Length; i++)
-                {
-                    char c = output[i];
-                    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=')
+                    cmd.CommandTimeout = TimeSpan.FromSeconds(90);
+                    // Stream the raw tar.gz bytes straight off the command's
+                    // OutputStream - no base64 round-trip and no markers needed,
+                    // since SSH.NET gives us the binary channel directly.
+                    IAsyncResult asyncResult = cmd.BeginExecute();
+                    using (MemoryStream ms = new MemoryStream())
                     {
-                        cleanB64.Append(c);
+                        cmd.OutputStream.CopyTo(ms);
+                        cmd.EndExecute(asyncResult);
+                        tarGzBytes = ms.ToArray();
                     }
                 }
 
-                if (cleanB64.Length == 0) return new byte[0];
+                if (tarGzBytes.Length == 0) return new byte[0];
 
-                byte[] tarGzBytes = Convert.FromBase64String(cleanB64.ToString());
                 Dictionary<string, byte[]> extractedFiles = ExtractTar(tarGzBytes);
                 return ZipPacker.CreateZip(extractedFiles);
             }
             catch
             {
                 return new byte[0];
-            }
-            finally
-            {
-                try { File.Delete(apPath); } catch { }
             }
         }
 
@@ -544,83 +480,23 @@ namespace MYSFTP
             return files;
         }
 
-        public string WriteRemoteBytes(string remotePath, byte[] data)
-        {
-            if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
-
-            string b64 = Convert.ToBase64String(data);
-            string apPath = CreateAskPass();
-            try
-            {
-                string rPath = remotePath.Replace('\\', '/');
-                int lastSlash = rPath.LastIndexOf('/');
-                string rDir = lastSlash > 0 ? rPath.Substring(0, lastSlash) : "/";
-
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = FindSshExe();
-                string remoteCmd = "mkdir -p " + EscapeShell(rDir) + " && base64 -d > " + EscapeShell(rPath);
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + remoteCmd + "\"";
-                psi.UseShellExecute = false;
-                psi.RedirectStandardInput = true;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.CreateNoWindow = true;
-                psi.EnvironmentVariables["SSH_ASKPASS"] = apPath;
-                psi.EnvironmentVariables["SSH_ASKPASS_REQUIRE"] = "force";
-                psi.EnvironmentVariables["DISPLAY"] = ":0";
-
-                Process p = Process.Start(psi);
-                using (StreamWriter sw = new StreamWriter(p.StandardInput.BaseStream, Encoding.ASCII))
-                {
-                    sw.Write(b64);
-                    sw.Flush();
-                }
-                string stderr = p.StandardError.ReadToEnd();
-                p.WaitForExit(15000);
-                if (!p.HasExited) try { p.Kill(); } catch { }
-
-                return stderr;
-            }
-            finally
-            {
-                try { File.Delete(apPath); } catch { }
-            }
-        }
-
-        private string CreateAskPass()
-        {
-            string p = Path.Combine(Path.GetTempPath(), "mysftp_cmd_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
-            string escapedPw = (password ?? "").Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
-                                              .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
-                                              .Replace("\"", "^\"");
-            File.WriteAllText(p, "@echo off\r\necho " + escapedPw + "\r\n");
-            return p;
-        }
-
         public void Disconnect()
         {
             connected = false;
-            StopStreaming();
             StopInteractiveShell();
-            if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
-            {
-                try { File.Delete(askpassPath); } catch { }
-            }
-            askpassPath = null;
-        }
 
-        private static string FindSshExe()
-        {
-            string[] paths = new string[] {
-                @"C:\Windows\System32\OpenSSH\ssh.exe",
-                @"C:\Program Files\OpenSSH\ssh.exe",
-                @"C:\Program Files (x86)\OpenSSH\ssh.exe"
-            };
-            foreach (string p in paths)
+            if (sshClient != null)
             {
-                if (File.Exists(p)) return p;
+                try { if (sshClient.IsConnected) sshClient.Disconnect(); } catch { }
+                try { sshClient.Dispose(); } catch { }
+                sshClient = null;
             }
-            return "ssh.exe";
+            if (sftpClient != null)
+            {
+                try { if (sftpClient.IsConnected) sftpClient.Disconnect(); } catch { }
+                try { sftpClient.Dispose(); } catch { }
+                sftpClient = null;
+            }
         }
 
         private static string EscapeShell(string s)
@@ -690,7 +566,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v205");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v206");
             }
             catch { }
 
@@ -1396,100 +1272,14 @@ namespace MYSFTP
             }
         }
 
-        private static readonly HashSet<string> Months = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-            "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september", "oktober", "november", "desember"
-        };
-
-        private static List<string> ParseLsLines(string raw, string dir)
-        {
-            List<string> items = new List<string>();
-            if (string.IsNullOrEmpty(raw)) return items;
-
-            string[] lines = raw.Split(new char[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string rawLine in lines)
-            {
-                string line = rawLine.Trim();
-                if (line.StartsWith("total ", StringComparison.OrdinalIgnoreCase) || line.Length < 10) continue;
-
-                char firstChar = line[0];
-                if (firstChar != '-' && firstChar != 'd' && firstChar != 'l' && 
-                    firstChar != 'c' && firstChar != 'b' && firstChar != 's' && firstChar != 'p')
-                {
-                    continue;
-                }
-
-                string[] parts = System.Text.RegularExpressions.Regex.Split(line, @"\s+");
-                if (parts.Length < 6) continue;
-                if (parts[0].Length < 9) continue;
-
-                bool isDir = firstChar == 'd' || firstChar == 'l';
-
-                long size = 0;
-                string modified = "";
-                int nameStartIdx = -1;
-
-                for (int i = 3; i < parts.Length - 1; i++)
-                {
-                    if (parts[i].Length == 10 && parts[i][4] == '-' && parts[i][7] == '-')
-                    {
-                        long.TryParse(parts[i - 1], out size);
-                        modified = parts[i] + " " + (i + 1 < parts.Length ? parts[i + 1] : "");
-                        nameStartIdx = i + 2;
-                        break;
-                    }
-                    string token = parts[i].TrimEnd('.', ',');
-                    if (Months.Contains(token))
-                    {
-                        long.TryParse(parts[i - 1], out size);
-                        if (i + 2 < parts.Length)
-                        {
-                            modified = parts[i] + " " + parts[i + 1] + " " + parts[i + 2];
-                            nameStartIdx = i + 3;
-                        }
-                        else if (i + 1 < parts.Length)
-                        {
-                            modified = parts[i] + " " + parts[i + 1];
-                            nameStartIdx = i + 2;
-                        }
-                        break;
-                    }
-                }
-
-                if (nameStartIdx < 0 || nameStartIdx >= parts.Length)
-                {
-                    if (parts.Length >= 8)
-                    {
-                        long.TryParse(parts[4], out size);
-                        modified = parts[5] + " " + parts[6];
-                        nameStartIdx = 7;
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                }
-
-                string name = "";
-                for (int i = nameStartIdx; i < parts.Length; i++)
-                {
-                    if (i > nameStartIdx) name += " ";
-                    name += parts[i];
-                }
-
-                int arrowIdx = name.IndexOf(" -> ");
-                if (arrowIdx >= 0) name = name.Substring(0, arrowIdx).Trim();
-
-                if (name == "." || name == ".." || string.IsNullOrEmpty(name)) continue;
-
-                string fullPath = (dir == "/" ? "" : dir) + "/" + name;
-                items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(fullPath) + "\",\"isDirectory\":" + (isDir ? "true" : "false") + ",\"size\":" + size + ",\"modified\":\"" + EscapeJson(modified.Trim()) + "\"}");
-            }
-
-            return items;
-        }
-
+        // Folders now list over the already-open SFTP channel directly
+        // (SSH_FXP_READDIR), instead of running `ls -la` as a shell command
+        // and regex-parsing its text output. That removes: the exec round
+        // trip, the up-to-14s "retry once on anything that looks like a
+        // connection hiccup" fallback, and per-line regex parsing — all of
+        // which were the actual source of the "loading feels laggy" delay.
+        // Size/isDirectory/mtime now come back as real typed SFTP attributes
+        // instead of being guessed out of `ls` column positions.
         private static string ListRemoteDirFast(string dir)
         {
             try
@@ -1498,24 +1288,36 @@ namespace MYSFTP
                 dir = dir.TrimEnd(new char[] { '/' });
                 if (string.IsNullOrEmpty(dir)) dir = "/";
 
-                string cleanDir = dir == "/" ? "/" : "'" + EscapeShell(dir) + "'";
-                string cmd = "LC_ALL=C ls -la " + cleanDir + " 2>&1";
-                string raw = sshManager.RunCommand(cmd, 6000);
-
-                List<string> items = ParseLsLines(raw, dir);
-
-                if (items.Count == 0)
+                List<DirEntry> entries = new List<DirEntry>();
+                foreach (Renci.SshNet.Sftp.ISftpFile f in sshManager.ListDirectory(dir))
                 {
-                    string rawLower = raw.ToLower();
-                    if (rawLower.Contains("no such file") || rawLower.Contains("cannot access") || 
-                        rawLower.Contains("permission denied") || rawLower.Contains("tidak dapat") || 
-                        rawLower.Contains("izin ditolak") || rawLower.Contains("tidak ada berkas"))
-                    {
-                        return "{\"success\":false,\"error\":\"" + EscapeJson(raw.Trim()) + "\"}";
-                    }
+                    string name = f.Name;
+                    if (name == "." || name == "..") continue;
 
-                    string fallbackRaw = sshManager.RunCommand("ls -la " + cleanDir + " 2>&1", 6000);
-                    items = ParseLsLines(fallbackRaw, dir);
+                    DirEntry de = new DirEntry();
+                    de.Name = name;
+                    de.IsDirectory = f.IsDirectory;
+                    de.Size = f.IsDirectory ? 0 : f.Length;
+                    de.Modified = f.LastWriteTime;
+                    entries.Add(de);
+                }
+
+                // Folders first, then alphabetical - snappier to scan visually
+                // and matches what most file managers do (SFTP doesn't
+                // guarantee any particular server-side order on its own).
+                entries.Sort(delegate (DirEntry a, DirEntry b)
+                {
+                    if (a.IsDirectory != b.IsDirectory) return a.IsDirectory ? -1 : 1;
+                    return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                });
+
+                List<string> items = new List<string>(entries.Count);
+                foreach (DirEntry de in entries)
+                {
+                    string fullPath = (dir == "/" ? "" : dir) + "/" + de.Name;
+                    items.Add("{\"name\":\"" + EscapeJson(de.Name) + "\",\"path\":\"" + EscapeJson(fullPath) +
+                        "\",\"isDirectory\":" + (de.IsDirectory ? "true" : "false") + ",\"size\":" + de.Size +
+                        ",\"modified\":\"" + de.Modified.ToString("yyyy-MM-dd HH:mm") + "\"}");
                 }
 
                 string parent = dir == "/" ? "/" : dir.Substring(0, dir.LastIndexOf('/'));
@@ -1529,11 +1331,21 @@ namespace MYSFTP
             }
         }
 
+        private struct DirEntry
+        {
+            public string Name;
+            public bool IsDirectory;
+            public long Size;
+            public DateTime Modified;
+        }
+
+
         private static string ReadRemoteFile(string path)
         {
             try
             {
-                string content = sshManager.RunCommand("cat '" + EscapeShell(path) + "' 2>&1", 8000);
+                byte[] bytes = sshManager.ReadRemoteBytes(path);
+                string content = Encoding.UTF8.GetString(bytes);
                 return "{\"success\":true,\"path\":\"" + EscapeJson(path) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
             }
             catch (Exception ex)
@@ -2012,7 +1824,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.5 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.6 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2615,7 +2427,7 @@ namespace MYSFTP
         isNavigating = false;
         showLoader(false);
         setNavButtonsBusy(false);
-      }, 8000);
+      }, 16000);
 
       fetch('/api/fs/list?path=' + encodeURIComponent(path))
         .then(function(r){ return r.json(); })
