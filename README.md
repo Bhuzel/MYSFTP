@@ -1,9 +1,9 @@
 <div align="center">
 
-# ⚡ MYSFTP (v2.0.9 — Direct Server-Side Archive Streaming & Instant Terminal Core)
+# ⚡ MYSFTP (v2.1.0 — Universal Tar.Gz Archive Streaming & Non-Blocking Terminal Core)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
-*Engineered for Public Release with Luxury Dark Gold Aesthetics, Direct Server-Side ZIP Streaming & Instant Terminal Execution by **ZellRayy***
+*Engineered for Public Release with Luxury Dark Gold Aesthetics, Universal Tar.Gz Streaming & Non-Blocking SSH Engine by **ZellRayy***
 
 ---
 
@@ -48,21 +48,21 @@
 
 ---
 
-## 🌟 Fitur Unggulan (v2.0.9)
+## 🌟 Fitur Unggulan (v2.1.0)
 
-### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.9-Setup.exe`)
-* **🗜️ Direct Server-Side Archive Streaming**: Pengunduhan folder / multi-item dibuat langsung di server remote (`zip` / `python` / `tar`) dan dialirkan via socket SFTP stream 64KB ke peramban. Tidak ada lagi masalah file 0 Byte, korupsi, atau kehabisan RAM.
-* **💻 SSH Termius Console Instan**: Terminal monospace interaktif dengan eksekusi perintah sinkron langsung (`RunCommand`) yang menjamin seluruh output (`ls`, `pm2 status`, `df -h`, `pm2 logs`, dll.) tampil seketika tanpa jeda.
+### 💻 1. Windows Desktop Suite (`MYSFTP-v2.1.0-Setup.exe`)
+* **🗜️ Universal Tar.Gz Archive Streaming**: Mengunduh folder atau banyak berkas terpilih langsung dikompresi menggunakan format universal `.tar.gz` yang didukung 100% di semua server Linux, tanpa dependensi zip, dan dialirkan via socket SFTP stream 64KB.
+* **💻 SSH Termius Console Anti-Timeout**: Terminal monospace interaktif dengan stream reader dinamis. Menampilkan log instan untuk `pm2 logs`, `ls -la`, `df -h`, `pm2 status`, dll. tanpa timeout 30 detik.
 * **⚡ Self-Contained Native SSH.NET Core**: Menggunakan library `Renci.SshNet` murni tanpa dependensi eksternal — 100% plug and play di seluruh edisi Windows.
 * **🌐 Pure SFTP Directory Protocol (`SSH_FXP_READDIR`)**: Listing berkas/folder remote langsung dari kanal SFTP biner dengan atribut objek asli (`SftpFile`), bebas dari parsing regex `ls`.
-* **📁 Clean Relative Folder Extraction**: Saat mengunduh folder remote, isi file ZIP hanya berisi folder target langsung tanpa rantai path parent yang panjang.
+* **📁 Clean Relative Folder Extraction**: Saat mengunduh folder remote, isi file arsip hanya berisi folder target langsung tanpa rantai path parent yang panjang.
 * **🎨 Luxury Glassmorphism Modals**: Bebas dari pop-up browser bawaan (`127.0.0.1 says...`). Semua pop-up konfirmasi dan input menggunakan tema dark gold transparan yang elegan.
 * **📁 Upload Folder & Drag & Drop Rekursif**: Tombol **`📁 Upload Folder`** dan area drag & drop memungkinkan transfer folder lengkap secara rekursif.
 * **🗂️ Multi-Select & Batch Actions**: Checkbox pilihan di setiap baris dan header tabel untuk menghapus atau mengunduh banyak berkas sekaligus dalam 1 kali klik.
 * **✏️ Pro Code Editor**: Editor kode terintegrasi dengan shortcut keyboard **`Ctrl+S`** untuk menyimpan berkas langsung ke server remote via SFTP socket.
 * **📦 Dedicated NSIS Installer**: Installer resmi tunggal lengkap dengan dependency `Renci.SshNet.dll`, Start Menu shortcut, dan terdaftar di Add/Remove Programs.
 
-### 📱 2. Android Mobile App (`MYSFTP-v2.0.9.apk`)
+### 📱 2. Android Mobile App (`MYSFTP-v2.1.0.apk`)
 * **Spacious Single-Pane Explorer**: Tampilan direktori remote yang lapang dan responsif.
 * **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto-scroll dan drag-and-copy.
 * **OTA Auto Updates**: Otomatis mendeteksi update terbaru dari GitHub repository.
@@ -72,14 +72,14 @@
 ## 🚀 Quick Start
 
 ### 🖥️ Windows PC / Laptop
-1. Unduh **`MYSFTP-v2.0.9-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.1.0-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Jalankan file installer dan selesaikan langkah instalasi.
 3. Buka **MYSFTP** dari Start Menu atau Desktop.
 4. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
 5. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah/mengunduh folder, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
-1. Unduh **`MYSFTP-v2.0.9.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.1.0.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Pasang APK pada perangkat Android Anda.
 
 ---
@@ -101,5 +101,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v2.0.9 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v2.1.0 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>

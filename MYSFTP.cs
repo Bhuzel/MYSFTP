@@ -121,32 +121,92 @@ namespace MYSFTP
             }
         }
 
-        public string RunCommand(string command, int timeoutMs = 25000)
+        public string RunCommand(string command, int timeoutMs = 15000)
         {
             if (!EnsureConnected())
                 return string.IsNullOrEmpty(lastConnectError) ? "Belum terhubung ke SSH" : lastConnectError;
 
             try
             {
-                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(command))
+                string cmdToRun = (command ?? "").Trim();
+                if (cmdToRun == "pm2 logs")
+                {
+                    cmdToRun = "pm2 logs --lines 50 --nostream 2>&1";
+                }
+                else if (cmdToRun.StartsWith("pm2 logs") && !cmdToRun.Contains("--nostream"))
+                {
+                    cmdToRun += " --nostream 2>&1";
+                }
+
+                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(cmdToRun))
                 {
                     cmd.CommandTimeout = TimeSpan.FromMilliseconds(timeoutMs);
-                    string stdout = cmd.Execute();
-                    string stderr = cmd.Error;
-                    stdout = (stdout ?? "").Trim();
-                    stderr = (stderr ?? "").Trim();
-                    if (!string.IsNullOrEmpty(stdout) && !string.IsNullOrEmpty(stderr))
-                        return stdout + "\n" + stderr;
-                    if (!string.IsNullOrEmpty(stdout))
-                        return stdout;
-                    if (!string.IsNullOrEmpty(stderr))
-                        return stderr;
-                    return "(Perintah selesai tanpa output)";
+                    IAsyncResult ar = cmd.BeginExecute();
+
+                    StringBuilder output = new StringBuilder();
+                    byte[] buffer = new byte[4096];
+                    int totalWait = 0;
+                    int quietMs = 0;
+
+                    using (Stream outStream = cmd.OutputStream)
+                    using (Stream errStream = cmd.ExtendedOutputStream)
+                    {
+                        while (totalWait < timeoutMs)
+                        {
+                            bool gotData = false;
+
+                            while (outStream.CanRead && cmd.OutputStream.Position < cmd.OutputStream.Length)
+                            {
+                                int read = outStream.Read(buffer, 0, buffer.Length);
+                                if (read > 0)
+                                {
+                                    output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                                    gotData = true;
+                                }
+                                else break;
+                            }
+
+                            while (errStream.CanRead && cmd.ExtendedOutputStream.Position < cmd.ExtendedOutputStream.Length)
+                            {
+                                int read = errStream.Read(buffer, 0, buffer.Length);
+                                if (read > 0)
+                                {
+                                    output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                                    gotData = true;
+                                }
+                                else break;
+                            }
+
+                            if (ar.IsCompleted) break;
+
+                            if (gotData)
+                            {
+                                quietMs = 0;
+                            }
+                            else
+                            {
+                                quietMs += 50;
+                                if (output.Length > 0 && quietMs >= 600) break;
+                            }
+
+                            Thread.Sleep(50);
+                            totalWait += 50;
+                        }
+
+                        try
+                        {
+                            string finalResult = cmd.Result;
+                            string finalError = cmd.Error;
+                            if (!string.IsNullOrEmpty(finalResult) && output.Length == 0) output.Append(finalResult);
+                            if (!string.IsNullOrEmpty(finalError) && output.Length == 0) output.Append(finalError);
+                        }
+                        catch { }
+                    }
+
+                    string resultStr = output.ToString().Trim();
+                    if (!string.IsNullOrEmpty(resultStr)) return resultStr;
+                    return "(Perintah selesai dijalankan)";
                 }
-            }
-            catch (Renci.SshNet.Common.SshOperationTimeoutException)
-            {
-                return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
             }
             catch (Exception ex)
             {
@@ -201,8 +261,8 @@ namespace MYSFTP
 
         public void DownloadRemoteArchiveDirect(List<string> paths, Stream outputStream, out string outFileName, out string outContentType)
         {
-            outFileName = "archive.zip";
-            outContentType = "application/zip";
+            outFileName = "archive.tar.gz";
+            outContentType = "application/gzip";
 
             if (!EnsureConnected() || paths == null || paths.Count == 0) return;
 
@@ -212,7 +272,7 @@ namespace MYSFTP
                 int lastSlash = firstPath.LastIndexOf('/');
                 string parentDir = lastSlash > 0 ? firstPath.Substring(0, lastSlash) : (lastSlash == 0 ? "/" : ".");
                 string primaryName = Path.GetFileName(firstPath);
-                if (string.IsNullOrEmpty(primaryName)) primaryName = "archive";
+                if (string.IsNullOrEmpty(primaryName)) primaryName = "folder";
 
                 List<string> relNames = new List<string>();
                 foreach (string itemPath in paths)
@@ -245,32 +305,39 @@ namespace MYSFTP
                 }
 
                 string uid = Guid.NewGuid().ToString("N").Substring(0, 8);
-                string tmpZip = "/tmp/mysftp_" + uid + ".zip";
                 string tmpTar = "/tmp/mysftp_" + uid + ".tar.gz";
 
-                // 1. Try server-side zip / python make_archive (native .zip)
-                string createCmd = "cd '" + EscapeShell(parentDir) + "' && (" +
-                    "zip -q -r '" + tmpZip + "' " + itemsStr.ToString().Trim() + " 2>/dev/null || " +
-                    "python3 -c \"import shutil; shutil.make_archive('/tmp/mysftp_" + uid + "', 'zip', '" + EscapeShell(parentDir) + "', '" + EscapeShell(relNames[0]) + "')\" 2>/dev/null || " +
-                    "python -c \"import shutil; shutil.make_archive('/tmp/mysftp_" + uid + "', 'zip', '" + EscapeShell(parentDir) + "', '" + EscapeShell(relNames[0]) + "')\" 2>/dev/null || " +
-                    "tar -czf '" + tmpTar + "' " + itemsStr.ToString().Trim() + " 2>/dev/null" +
-                    ")";
+                // Native Linux tar - universally supported on 100% of servers
+                string createCmd = "cd '" + EscapeShell(parentDir) + "' && tar -czf '" + tmpTar + "' " + itemsStr.ToString().Trim() + " 2>&1";
 
-                RunCommand(createCmd, 120000);
+                RunCommand(createCmd, 60000);
 
-                if (sftpClient.Exists(tmpZip))
+                outFileName = (paths.Count == 1 ? primaryName : ("MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"))) + ".tar.gz";
+                outContentType = "application/gzip";
+
+                if (sftpClient.Exists(tmpTar))
                 {
-                    outFileName = (paths.Count == 1 ? primaryName : ("MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"))) + ".zip";
-                    outContentType = "application/zip";
-                    sftpClient.DownloadFile(tmpZip, outputStream);
-                    RunCommand("rm -f '" + tmpZip + "'", 5000);
-                }
-                else if (sftpClient.Exists(tmpTar))
-                {
-                    outFileName = (paths.Count == 1 ? primaryName : ("MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"))) + ".tar.gz";
-                    outContentType = "application/gzip";
-                    sftpClient.DownloadFile(tmpTar, outputStream);
+                    using (Stream sftpStream = sftpClient.OpenRead(tmpTar))
+                    {
+                        byte[] buf = new byte[65536];
+                        int n;
+                        while ((n = sftpStream.Read(buf, 0, buf.Length)) > 0)
+                        {
+                            outputStream.Write(buf, 0, n);
+                        }
+                        outputStream.Flush();
+                    }
                     RunCommand("rm -f '" + tmpTar + "'", 5000);
+                }
+                else
+                {
+                    using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand("cd '" + EscapeShell(parentDir) + "' && tar -czf - " + itemsStr.ToString().Trim()))
+                    {
+                        cmd.CommandTimeout = TimeSpan.FromSeconds(120);
+                        cmd.BeginExecute();
+                        cmd.OutputStream.CopyTo(outputStream);
+                        outputStream.Flush();
+                    }
                 }
             }
             catch
@@ -414,7 +481,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v209");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v210");
             }
             catch { }
 
@@ -1674,7 +1741,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.9 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.1.0 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2437,7 +2504,7 @@ namespace MYSFTP
       var url = '/api/fs/download?path=' + encodeURIComponent(path) + '&isDir=' + (isDir ? 'true' : 'false');
       var a = document.createElement('a');
       a.href = url;
-      a.download = isDir ? (name + '.zip') : name;
+      a.download = isDir ? (name + '.tar.gz') : name;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -2454,7 +2521,7 @@ namespace MYSFTP
         return;
       }
       var count = selectedPaths.length;
-      toast('⏳ Mengompresi ' + count + ' item terpilih (ZIP) untuk diunduh...');
+      toast('⏳ Mengompresi ' + count + ' item terpilih untuk diunduh...');
       showLoader(true);
       fetch('/api/fs/batch-download', {
         method: 'POST',
@@ -2466,18 +2533,18 @@ namespace MYSFTP
       }).then(function(blob) {
         showLoader(false);
         if (blob.size === 0) {
-          toast('❌ Gagal: File arsip ZIP kosong.');
+          toast('❌ Gagal: File arsip kosong.');
           return;
         }
         var url = window.URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'MYSFTP_Archive_' + Date.now() + '.zip';
+        a.download = 'MYSFTP_Archive_' + Date.now() + '.tar.gz';
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(function(){ window.URL.revokeObjectURL(url); }, 2000);
-        toast('✔ Unduhan ZIP berhasil!');
+        toast('✔ Unduhan arsip berhasil!');
       }).catch(function(err) {
         showLoader(false);
         toast('❌ Gagal mengunduh: ' + err.message);
