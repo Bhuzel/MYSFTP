@@ -19,6 +19,7 @@ namespace MYSFTP
         private string user;
         private string password;
         private bool connected;
+        private string controlPath;
         private object streamLock = new object();
         private StringBuilder streamOutput = new StringBuilder();
 
@@ -41,7 +42,25 @@ namespace MYSFTP
                                  .Replace("\"", "^\"");
             File.WriteAllText(askpassPath, "@echo off\r\necho " + escapedPw + "\r\n");
 
+            // One shared multiplexed connection per session. The first ssh.exe call
+            // pays the full TCP+handshake+auth cost and keeps a control socket open;
+            // every call after that attaches to the same socket instead of redoing
+            // the handshake, which is what makes the app feel instant instead of
+            // re-connecting on every click.
+            controlPath = Path.Combine(Path.GetTempPath(), "mysftp_cm_" + Guid.NewGuid().ToString("N").Substring(0, 10) + ".sock");
+
             connected = true;
+        }
+
+        // Shared multiplexing options appended to every ssh.exe invocation for this
+        // session. ControlMaster=auto: reuse the socket if it exists, otherwise become
+        // the master. ControlPersist=10m: keep the master alive in the background for
+        // 10 minutes of inactivity so navigating around the file browser doesn't pay a
+        // fresh handshake each time.
+        private string MuxOpts()
+        {
+            if (string.IsNullOrEmpty(controlPath)) return "";
+            return "-o ControlMaster=auto -o ControlPath=\"" + controlPath + "\" -o ControlPersist=10m ";
         }
 
         private string GetOrCreateAskPass()
@@ -65,7 +84,7 @@ namespace MYSFTP
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -o BatchMode=no -o Compression=no -o TCPKeepAlive=yes -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -o BatchMode=no -o Compression=no -o TCPKeepAlive=yes " + MuxOpts() + "-p " + port + " " + user + "@" + host + " " + command;
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
@@ -192,7 +211,7 @@ namespace MYSFTP
             string apPath = CreateAskPass();
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = FindSshExe();
-            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -p " + port + " " + user + "@" + host + " \"/bin/bash -i 2>&1 || sh -i 2>&1\"";
+            psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 " + MuxOpts() + "-p " + port + " " + user + "@" + host + " \"/bin/bash -i 2>&1 || sh -i 2>&1\"";
             psi.UseShellExecute = false;
             psi.RedirectStandardInput = true;
             psi.RedirectStandardOutput = true;
@@ -290,7 +309,7 @@ namespace MYSFTP
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
                 string b64Cmd = "echo '___MYSFTP_B64_START___' && (base64 -w 0 '" + EscapeShell(remotePath) + "' 2>/dev/null || base64 '" + EscapeShell(remotePath) + "' 2>/dev/null || cat '" + EscapeShell(remotePath) + "') && echo '' && echo '___MYSFTP_B64_END___'";
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 -p " + port + " " + user + "@" + host + " \"" + b64Cmd + "\"";
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 " + MuxOpts() + "-p " + port + " " + user + "@" + host + " \"" + b64Cmd + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
@@ -393,7 +412,7 @@ namespace MYSFTP
 
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 -p " + port + " " + user + "@" + host + " \"" + tarCmd + "\"";
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=15 " + MuxOpts() + "-p " + port + " " + user + "@" + host + " \"" + tarCmd + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
@@ -559,7 +578,7 @@ namespace MYSFTP
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
                 string remoteCmd = "mkdir -p " + EscapeShell(rDir) + " && base64 -d > " + EscapeShell(rPath);
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 -p " + port + " " + user + "@" + host + " \"" + remoteCmd + "\"";
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=10 " + MuxOpts() + "-p " + port + " " + user + "@" + host + " \"" + remoteCmd + "\"";
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
@@ -602,6 +621,26 @@ namespace MYSFTP
             connected = false;
             StopStreaming();
             StopInteractiveShell();
+
+            if (!string.IsNullOrEmpty(controlPath) && File.Exists(controlPath) && !string.IsNullOrEmpty(host))
+            {
+                try
+                {
+                    ProcessStartInfo killPsi = new ProcessStartInfo();
+                    killPsi.FileName = FindSshExe();
+                    killPsi.Arguments = "-o ControlPath=\"" + controlPath + "\" -O exit " + user + "@" + host;
+                    killPsi.UseShellExecute = false;
+                    killPsi.CreateNoWindow = true;
+                    killPsi.RedirectStandardOutput = true;
+                    killPsi.RedirectStandardError = true;
+                    Process kp = Process.Start(killPsi);
+                    kp.WaitForExit(2000);
+                }
+                catch { }
+                try { if (File.Exists(controlPath)) File.Delete(controlPath); } catch { }
+            }
+            controlPath = null;
+
             if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
             {
                 try { File.Delete(askpassPath); } catch { }
@@ -690,7 +729,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v203");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v204");
             }
             catch { }
 
@@ -1065,7 +1104,7 @@ namespace MYSFTP
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost) && !string.IsNullOrEmpty(activePassword))
                     {
                         sshManager.Connect(activeHost, activePort, activeUser, activePassword);
-                        string test = sshManager.RunCommand("echo MYSFTP_OK", 6000);
+                        string test = sshManager.RunCommand("echo MYSFTP_OK", 12000);
 
                         if (test.Contains("MYSFTP_OK"))
                         {
@@ -2012,7 +2051,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.3 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.4 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
