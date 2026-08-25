@@ -1,14 +1,18 @@
-# MYSFTP v2.1.1 — Persistent Terminal Working Directory & Seamless CD Navigation
+# MYSFTP v2.1.2 — Real-Time Live Streaming Terminal Core & Full Control Character Encoder
 
-## ✨ Apa yang Baru & Diperbaiki di Versi 2.1.1
+## ✨ Apa yang Baru & Diperbaiki di Versi 2.1.2
 
-### 1. 💻 Navigasi Direktori Terminal (`cd`) Berjalan 100% Persisten
-- **Stateful Working Directory Tracking:** Sesi SSH kini melacak direktori kerja saat ini (`CurrentTerminalDir`) secara otomatis di setiap perintah.
-- **Dukungan Penuh Perintah `cd`:** Perintah seperti `cd ProjectBot`, `cd ..`, `cd /var/www`, dll. kini mengubah folder aktif dan bertahan untuk perintah berikutnya (`ls`, `./start.sh`, `npm start`, dll.).
-- **Dynamic Monospace Prompt:** Prompt terminal otomatis menampilkan path direktori aktif saat ini (contoh: `root@host:~/ProjectBot#`, `root@host:/etc/nginx#`).
+### 1. ⚡ Real-Time Live Streaming Terminal (Live Execution Display)
+- **Direct HTTP Chunked ReadableStream Engine:** Seluruh eksekusi perintah di terminal (`wget ... | bash`, `bench.sh`, `speedtest`, `pm2 logs`, `apt update`, `git clone`, dll.) dialirkan byte-per-byte secara **real-time** ke layar terminal saat perintah sedang berlangsung.
+- **Zero Freeze & Live Output:** Tampilan output tidak lagi menunggu script selesai, melainkan langsung mengetikkan baris demi baris secara interaktif seperti terminal Linux asli.
+
+### 2. 🛡️ RFC 8259 Compliant Control Character Encoder
+- **Fixed Bad Control Character JSON Error:** Mengatasi tuntas error `Bad control character in string literal in JSON` yang sebelumnya terjadi saat script Linux menghasilkan karakter ANSI escape, backspace (`\x08`), bell (`\x07`), atau karakter kontrol biner `< 0x20`.
+- Semua karakter kontrol sekarang di-encode secara sempurna dengan standar `\u00XX` sehingga aman diproses oleh JSON parser peramban.
 
 ---
 
+# MYSFTP v2.1.1 — Persistent Terminal Working Directory & Seamless CD Navigation
 # MYSFTP v2.1.0 — Universal Tar.Gz Archive Streaming & Non-Blocking Terminal Core
 # MYSFTP v2.0.9 — Direct Server-Side Archive Streaming & Instant Terminal Core
 # MYSFTP v2.0.8 — SSH Termius Terminal Real-Time Engine Fix
@@ -18,8 +22,8 @@
 ---
 
 ## 📦 File Rilis Resmi (Clean Single Assets):
-* 💻 **Windows PC:** `MYSFTP-v2.1.1-Setup.exe` (Installer tunggal resmi)
-* 📱 **Android:** `MYSFTP-v2.1.1.apk` (Aplikasi Android resmi)
+* 💻 **Windows PC:** `MYSFTP-v2.1.2-Setup.exe` (Installer tunggal resmi)
+* 📱 **Android:** `MYSFTP-v2.1.2.apk` (Aplikasi Android resmi)
 
 ## Cara pakai
 1. Jalankan `MYSFTP-Setup.exe` di Windows, pilih folder instalasi (misalnya `D:\Apps\MYSFTP`).

@@ -288,6 +288,118 @@ namespace MYSFTP
             }
         }
 
+        public void StreamTerminalCommand(string command, Stream outputStream)
+        {
+            if (!EnsureConnected())
+            {
+                byte[] err = Encoding.UTF8.GetBytes("Belum terhubung ke SSH.\r\n");
+                try { outputStream.Write(err, 0, err.Length); outputStream.Flush(); } catch { }
+                return;
+            }
+
+            try
+            {
+                string cmdTrim = (command ?? "").Trim();
+                if (string.IsNullOrEmpty(cmdTrim)) return;
+
+                string curDir = CurrentTerminalDir;
+                string pwdMarker = "___MYSFTP_DIR___";
+
+                string fullCmd;
+                if (!string.IsNullOrEmpty(curDir))
+                {
+                    fullCmd = "cd '" + EscapeShell(curDir) + "' 2>/dev/null; " + cmdTrim + "; echo ''; echo '" + pwdMarker + "'; pwd";
+                }
+                else
+                {
+                    fullCmd = cmdTrim + "; echo ''; echo '" + pwdMarker + "'; pwd";
+                }
+
+                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(fullCmd))
+                {
+                    cmd.CommandTimeout = TimeSpan.FromMinutes(15);
+                    IAsyncResult ar = cmd.BeginExecute();
+
+                    byte[] buffer = new byte[2048];
+                    StringBuilder pwdCollector = new StringBuilder();
+                    bool markerSeen = false;
+
+                    using (Stream outStream = cmd.OutputStream)
+                    using (Stream errStream = cmd.ExtendedOutputStream)
+                    {
+                        while (true)
+                        {
+                            bool gotData = false;
+
+                            while (outStream.CanRead && cmd.OutputStream.Position < cmd.OutputStream.Length)
+                            {
+                                int read = outStream.Read(buffer, 0, buffer.Length);
+                                if (read > 0)
+                                {
+                                    string chunk = Encoding.UTF8.GetString(buffer, 0, read);
+                                    if (chunk.Contains(pwdMarker))
+                                    {
+                                        markerSeen = true;
+                                        int mIdx = chunk.IndexOf(pwdMarker);
+                                        string before = chunk.Substring(0, mIdx);
+                                        if (!string.IsNullOrEmpty(before))
+                                        {
+                                            byte[] b = Encoding.UTF8.GetBytes(before);
+                                            outputStream.Write(b, 0, b.Length);
+                                            try { outputStream.Flush(); } catch { }
+                                        }
+                                        pwdCollector.Append(chunk.Substring(mIdx + pwdMarker.Length));
+                                    }
+                                    else if (markerSeen)
+                                    {
+                                        pwdCollector.Append(chunk);
+                                    }
+                                    else
+                                    {
+                                        outputStream.Write(buffer, 0, read);
+                                        try { outputStream.Flush(); } catch { }
+                                    }
+                                    gotData = true;
+                                }
+                                else break;
+                            }
+
+                            while (errStream.CanRead && cmd.ExtendedOutputStream.Position < cmd.ExtendedOutputStream.Length)
+                            {
+                                int read = errStream.Read(buffer, 0, buffer.Length);
+                                if (read > 0)
+                                {
+                                    outputStream.Write(buffer, 0, read);
+                                    try { outputStream.Flush(); } catch { }
+                                    gotData = true;
+                                }
+                                else break;
+                            }
+
+                            if (ar.IsCompleted) break;
+
+                            Thread.Sleep(gotData ? 15 : 40);
+                        }
+
+                        string dirPart = pwdCollector.ToString().Trim();
+                        string[] lines = dirPart.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (lines.Length > 0 && !string.IsNullOrEmpty(lines[0]) && lines[0].StartsWith("/"))
+                        {
+                            currentTerminalDir = lines[0].Trim();
+                            byte[] markerUpdate = Encoding.UTF8.GetBytes("\x1b[?MYSFTP_CWD=" + currentTerminalDir + "\x1b\\");
+                            outputStream.Write(markerUpdate, 0, markerUpdate.Length);
+                            try { outputStream.Flush(); } catch { }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                byte[] err = Encoding.UTF8.GetBytes("\r\n[SSH Error: " + ex.Message + "]\r\n");
+                try { outputStream.Write(err, 0, err.Length); outputStream.Flush(); } catch { }
+            }
+        }
+
         public IEnumerable<Renci.SshNet.Sftp.SftpFile> ListDirectory(string path)
         {
             if (!EnsureConnected())
@@ -553,7 +665,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v211");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v212");
             }
             catch { }
 
@@ -960,6 +1072,44 @@ namespace MYSFTP
                 {
                     bool conn = sshManager.IsConnected;
                     SendJson(res, "{\"connected\":" + (conn ? "true" : "false") + ",\"protocol\":\"" + EscapeJson(activeProtocol ?? "") + "\",\"name\":\"" + EscapeJson(activeName ?? "") + "\",\"host\":\"" + EscapeJson(activeHost ?? "") + "\"}");
+                }
+                else if (path == "/api/terminal/stream" && req.HttpMethod == "POST")
+                {
+                    string body = ReadBody(req);
+                    string cmd = ExtractVal(body, "command");
+
+                    res.ContentType = "text/plain; charset=utf-8";
+                    res.SendChunked = true;
+
+                    if (activeProtocol == "SFTP" && sshManager.IsConnected)
+                    {
+                        sshManager.StreamTerminalCommand(cmd, res.OutputStream);
+                    }
+                    else
+                    {
+                        ProcessStartInfo psi = new ProcessStartInfo("cmd.exe", "/c " + cmd)
+                        {
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                            StandardOutputEncoding = Encoding.UTF8,
+                            StandardErrorEncoding = Encoding.UTF8
+                        };
+                        using (Process p = Process.Start(psi))
+                        {
+                            char[] cbuf = new char[1024];
+                            int read;
+                            while ((read = p.StandardOutput.Read(cbuf, 0, cbuf.Length)) > 0)
+                            {
+                                byte[] b = Encoding.UTF8.GetBytes(new string(cbuf, 0, read));
+                                res.OutputStream.Write(b, 0, b.Length);
+                                try { res.OutputStream.Flush(); } catch { }
+                            }
+                            p.WaitForExit(10000);
+                        }
+                    }
+                    try { res.OutputStream.Close(); } catch { }
                 }
                 else if (path == "/api/terminal/exec" && req.HttpMethod == "POST")
                 {
@@ -1571,8 +1721,33 @@ namespace MYSFTP
 
         private static string EscapeJson(string s)
         {
-            if (s == null) return "";
-            return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n").Replace("\t", "\\t");
+            if (string.IsNullOrEmpty(s)) return "";
+            StringBuilder sb = new StringBuilder(s.Length + 16);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '\\': sb.Append("\\\\"); break;
+                    case '"':  sb.Append("\\\""); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ')
+                        {
+                            sb.Append("\\u");
+                            sb.Append(((int)c).ToString("x4"));
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                        break;
+                }
+            }
+            return sb.ToString();
         }
 
         private static string EscapeShell(string s)
@@ -1814,7 +1989,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.1.1 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.1.2 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2958,29 +3133,46 @@ namespace MYSFTP
       var promptStr = promptHost + ':' + termCwd + '# ';
       tPrint('\r\n\x1b[33m' + promptStr + esc(cmd) + '\x1b[0m\r\n');
 
-      fetch('/api/terminal/exec', {
+      fetch('/api/terminal/stream', {
         method: 'POST',
         headers: {'Content-Type':'application/json; charset=utf-8'},
         body: JSON.stringify({ command: cmd })
-      }).then(function(r){ return r.json(); }).then(function(d) {
-        if (d && d.cwd) {
-          var full = d.cwd;
-          if (full === '/root' || full === '/home/root') termCwd = '~';
-          else if (full.startsWith('/root/')) termCwd = '~/' + full.substring(6);
-          else if (full.startsWith('/home/' + (connProfile ? connProfile.username : ''))) {
-            var homePfx = '/home/' + (connProfile ? connProfile.username : '');
-            termCwd = '~' + full.substring(homePfx.length);
-          } else {
-            termCwd = full;
-          }
-          document.getElementById('tprompt').textContent = promptHost + ':' + termCwd + '#';
+      }).then(function(response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (!response.body || typeof response.body.getReader !== 'function') {
+          return response.text().then(function(t){ if (t) tPrint(t + '\r\n'); });
         }
 
-        if (d && d.output) {
-          tPrint(d.output + '\r\n');
-        } else if (d && d.error) {
-          tPrint('\x1b[31m' + d.error + '\x1b[0m\r\n');
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder('utf-8');
+
+        function readChunk() {
+          return reader.read().then(function(result) {
+            if (result.done) return;
+            var chunk = decoder.decode(result.value, { stream: true });
+            if (!chunk) return readChunk();
+
+            // Handle CWD update marker: \x1b[?MYSFTP_CWD=... \x1b\
+            var cwdMatch = chunk.match(/\x1b\[\?MYSFTP_CWD=([^\x1b]+)\x1b\\/);
+            if (cwdMatch) {
+              var full = cwdMatch[1].trim();
+              chunk = chunk.replace(cwdMatch[0], '');
+              if (full === '/root' || full === '/home/root') termCwd = '~';
+              else if (full.startsWith('/root/')) termCwd = '~/' + full.substring(6);
+              else if (full.startsWith('/home/' + (connProfile ? connProfile.username : ''))) {
+                var homePfx = '/home/' + (connProfile ? connProfile.username : '');
+                termCwd = '~' + full.substring(homePfx.length);
+              } else {
+                termCwd = full;
+              }
+              document.getElementById('tprompt').textContent = promptHost + ':' + termCwd + '#';
+            }
+
+            if (chunk) tPrint(chunk);
+            return readChunk();
+          });
         }
+        return readChunk();
       }).catch(function(err) {
         tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
       });
