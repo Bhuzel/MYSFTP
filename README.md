@@ -1,9 +1,9 @@
 <div align="center">
 
-# ⚡ MYSFTP (v2.0.1 — Luxury Glassmorphism Edition)
+# ⚡ MYSFTP (v2.0.2 — High-Performance & Luxury Edition)
 
 **Next-Generation Multi-Platform SFTP Client & SSH Termius Suite**  
-*Engineered for Public Release with Luxury Dark Gold Aesthetics & High-Performance Core by **ZellRayy***
+*Engineered for Public Release with Luxury Dark Gold Aesthetics & Ultra-Fast Core by **ZellRayy***
 
 ---
 
@@ -48,19 +48,21 @@
 
 ---
 
-## 🌟 Fitur Unggulan (v2.0.1)
+## 🌟 Fitur Unggulan (v2.0.2)
 
-### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.1-Setup.exe`)
-* **🗜️ Solid ZIP Archiving Engine**: Mengunduh folder tunggal atau banyak berkas terpilih (multi-select batch) kini 100% menggunakan engine ZIP internal C# yang terbukti andal, menghasilkan file `.zip` valid tanpa error 0 byte.
+### 💻 1. Windows Desktop Suite (`MYSFTP-v2.0.2-Setup.exe`)
+* **⚡ High-Performance Remote Engine**: Navigasi direktori remote super cepat dengan *Zero-Disk-Churn AskPass caching* dan *Optimistic In-Memory Directory Cache* (buka folder terasa instan 0ms).
+* **🌐 Universal Linux Compatibility**: Kompatibel 100% dengan semua distro Linux (Ubuntu, Debian, CentOS, RHEL, Alpine, Busybox, OpenWrt, Arch, BSD, macOS) dengan parser cerdas multi-format.
+* **🗜️ Solid ZIP Archiving Engine**: Mengunduh folder tunggal atau banyak berkas terpilih (multi-select batch) 100% menggunakan engine ZIP internal C# standar PKWare, bebas dari error 0-byte atau file corrupt.
 * **📁 Clean Relative Folder Extraction**: Saat mengunduh folder (misal `/root/ProjectBot/snippet/script`), isi file `.zip` hanya berisi folder `script/` langsung tanpa rantai parent direktori yang panjang.
-* **🎨 Luxury Glassmorphism Modals**: Tidak ada lagi dialog browser bawaan (`127.0.0.1 says...`). Semua pop-up konfirmasi dan input nama berkas kini menggunakan tema dark gold transparan yang mewah.
-* **📁 Upload Folder & Drag & Drop Rekursif**: Tombol **`📁 Upload Folder`** dan area drag & drop memungkinkan kamu menarik seluruh folder proyek dari Windows ke server VPS, otomatis membuat struktur subfolder secara rekursif.
-* **🗂️ Multi-Select & Batch Actions**: Fitur checkbox pilihan di setiap baris dan header tabel, memudahkan kamu menghapus atau mengunduh banyak berkas sekaligus dengan satu klik tombol.
-* **💻 SSH Termius Console Bebas Duplikasi**: Terminal interaktif tanpa duplikasi echo, navigasi riwayat perintah (↑ / ↓), eksekusi instan tombol Enter, serta tombol **`🛑 Ctrl+C`** responsif untuk menghentikan proses log (`pm2 logs`, `tail -f`).
+* **🎨 Luxury Glassmorphism Modals**: Bebas dari pop-up browser bawaan (`127.0.0.1 says...`). Semua pop-up konfirmasi dan input menggunakan tema dark gold transparan yang elegan.
+* **📁 Upload Folder & Drag & Drop Rekursif**: Tombol **`📁 Upload Folder`** dan area drag & drop memungkinkan kamu menarik seluruh folder proyek dari Windows ke server VPS secara otomatis.
+* **🗂️ Multi-Select & Batch Actions**: Checkbox pilihan di setiap baris dan header tabel untuk menghapus atau mengunduh banyak berkas sekaligus dalam 1 kali klik.
+* **💻 SSH Termius Console Bebas Duplikasi**: Terminal interaktif tanpa duplikasi echo, riwayat perintah (↑ / ↓), dan tombol **`🛑 Ctrl+C`** responsif untuk menghentikan proses log (`pm2 logs`, `tail -f`).
 * **✏️ Pro Code Editor**: Editor kode terintegrasi dengan shortcut keyboard **`Ctrl+S`** untuk menyimpan file langsung ke server remote.
 * **📦 Dedicated NSIS Installer**: Instalasi bersih ke drive manapun (misal `D:\`), Start Menu shortcut, dan terdaftar rapi di Windows Add/Remove Programs.
 
-### 📱 2. Android Mobile App (`MYSFTP-v2.0.1.apk`)
+### 📱 2. Android Mobile App (`MYSFTP-v2.0.2.apk`)
 * **Spacious Single-Pane Explorer**: Tampilan direktori remote yang lapang dan responsif.
 * **Termius-Inspired Mobile Terminal**: Terminal monospace dengan auto-scroll dan drag-and-copy.
 * **OTA Auto Updates**: Otomatis mendeteksi update terbaru dari GitHub repository.
@@ -70,14 +72,14 @@
 ## 🚀 Quick Start
 
 ### 🖥️ Windows PC / Laptop
-1. Unduh **`MYSFTP-v2.0.1-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.0.2-Setup.exe`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Jalankan file installer dan selesaikan langkah instalasi.
 3. Buka **MYSFTP** dari Start Menu atau Desktop.
 4. Klik **`+ Tambah Server Baru`** → Masukkan Host, Port, Username, Password VPS.
 5. Klik **`🚀 Buka`** untuk mulai mengelola berkas, mengunggah/mengunduh folder, dan membuka terminal SSH.
 
 ### 📱 Android Mobile
-1. Unduh **`MYSFTP-v2.0.1.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
+1. Unduh **`MYSFTP-v2.0.2.apk`** dari [**GitHub Releases**](https://github.com/Bhuzel/MYSFTP/releases/latest).
 2. Pasang APK pada perangkat Android Anda.
 
 ---
@@ -99,5 +101,5 @@ Repository ini dilengkapi dengan **GitHub Actions CI/CD** (`.github/workflows/an
 
 ---
 <div align="center">
-  <sub>MYSFTP v2.0.1 — Engineered with passion for speed, beauty, and developer productivity.</sub>
+  <sub>MYSFTP v2.0.2 — Engineered with passion for speed, beauty, and developer productivity.</sub>
 </div>

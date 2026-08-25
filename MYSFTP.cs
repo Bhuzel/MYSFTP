@@ -44,16 +44,28 @@ namespace MYSFTP
             connected = true;
         }
 
+        private string GetOrCreateAskPass()
+        {
+            if (!string.IsNullOrEmpty(askpassPath) && File.Exists(askpassPath))
+                return askpassPath;
+            askpassPath = Path.Combine(Path.GetTempPath(), "mysftp_ap_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".cmd");
+            string escapedPw = (password ?? "").Replace("^", "^^").Replace("&", "^&").Replace("|", "^|")
+                                              .Replace("<", "^<").Replace(">", "^>").Replace("%", "%%")
+                                              .Replace("\"", "^\"");
+            File.WriteAllText(askpassPath, "@echo off\r\necho " + escapedPw + "\r\n");
+            return askpassPath;
+        }
+
         public string RunCommand(string command, int timeoutMs = 8000)
         {
             if (!connected || string.IsNullOrEmpty(host)) return "Not connected";
 
-            string apPath = CreateAskPass();
+            string apPath = GetOrCreateAskPass();
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = FindSshExe();
-                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=6 -o BatchMode=no -p " + port + " " + user + "@" + host + " " + command;
+                psi.Arguments = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=5 -o BatchMode=no -o Compression=no -o TCPKeepAlive=yes -p " + port + " " + user + "@" + host + " " + command;
                 psi.UseShellExecute = false;
                 psi.RedirectStandardInput = true;
                 psi.RedirectStandardOutput = true;
@@ -88,10 +100,6 @@ namespace MYSFTP
             catch (Exception ex)
             {
                 return "SSH Error: " + ex.Message;
-            }
-            finally
-            {
-                try { File.Delete(apPath); } catch { }
             }
         }
 
@@ -1388,6 +1396,100 @@ namespace MYSFTP
             }
         }
 
+        private static readonly HashSet<string> Months = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+            "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september", "oktober", "november", "desember"
+        };
+
+        private static List<string> ParseLsLines(string raw, string dir)
+        {
+            List<string> items = new List<string>();
+            if (string.IsNullOrEmpty(raw)) return items;
+
+            string[] lines = raw.Split(new char[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string rawLine in lines)
+            {
+                string line = rawLine.Trim();
+                if (line.StartsWith("total ", StringComparison.OrdinalIgnoreCase) || line.Length < 10) continue;
+
+                char firstChar = line[0];
+                if (firstChar != '-' && firstChar != 'd' && firstChar != 'l' && 
+                    firstChar != 'c' && firstChar != 'b' && firstChar != 's' && firstChar != 'p')
+                {
+                    continue;
+                }
+
+                string[] parts = System.Text.RegularExpressions.Regex.Split(line, @"\s+");
+                if (parts.Length < 6) continue;
+                if (parts[0].Length < 9) continue;
+
+                bool isDir = firstChar == 'd' || firstChar == 'l';
+
+                long size = 0;
+                string modified = "";
+                int nameStartIdx = -1;
+
+                for (int i = 3; i < parts.Length - 1; i++)
+                {
+                    if (parts[i].Length == 10 && parts[i][4] == '-' && parts[i][7] == '-')
+                    {
+                        long.TryParse(parts[i - 1], out size);
+                        modified = parts[i] + " " + (i + 1 < parts.Length ? parts[i + 1] : "");
+                        nameStartIdx = i + 2;
+                        break;
+                    }
+                    string token = parts[i].TrimEnd('.', ',');
+                    if (Months.Contains(token))
+                    {
+                        long.TryParse(parts[i - 1], out size);
+                        if (i + 2 < parts.Length)
+                        {
+                            modified = parts[i] + " " + parts[i + 1] + " " + parts[i + 2];
+                            nameStartIdx = i + 3;
+                        }
+                        else if (i + 1 < parts.Length)
+                        {
+                            modified = parts[i] + " " + parts[i + 1];
+                            nameStartIdx = i + 2;
+                        }
+                        break;
+                    }
+                }
+
+                if (nameStartIdx < 0 || nameStartIdx >= parts.Length)
+                {
+                    if (parts.Length >= 8)
+                    {
+                        long.TryParse(parts[4], out size);
+                        modified = parts[5] + " " + parts[6];
+                        nameStartIdx = 7;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+
+                string name = "";
+                for (int i = nameStartIdx; i < parts.Length; i++)
+                {
+                    if (i > nameStartIdx) name += " ";
+                    name += parts[i];
+                }
+
+                int arrowIdx = name.IndexOf(" -> ");
+                if (arrowIdx >= 0) name = name.Substring(0, arrowIdx).Trim();
+
+                if (name == "." || name == ".." || string.IsNullOrEmpty(name)) continue;
+
+                string fullPath = (dir == "/" ? "" : dir) + "/" + name;
+                items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(fullPath) + "\",\"isDirectory\":" + (isDir ? "true" : "false") + ",\"size\":" + size + ",\"modified\":\"" + EscapeJson(modified.Trim()) + "\"}");
+            }
+
+            return items;
+        }
+
         private static string ListRemoteDirFast(string dir)
         {
             try
@@ -1396,72 +1498,24 @@ namespace MYSFTP
                 dir = dir.TrimEnd(new char[] { '/' });
                 if (string.IsNullOrEmpty(dir)) dir = "/";
 
-                string raw = sshManager.RunCommand("\"LC_ALL=C ls -la --time-style=long-iso " + EscapeShell(dir) + " 2>&1\"", 7000);
-                string rawLower = raw.ToLower();
-                if (rawLower.Contains("no such file") || rawLower.Contains("cannot access") || 
-                    rawLower.Contains("permission denied") || rawLower.Contains("tidak dapat") || 
-                    rawLower.Contains("izin ditolak") || rawLower.Contains("tidak ada berkas"))
+                string cleanDir = dir == "/" ? "/" : "'" + EscapeShell(dir) + "'";
+                string cmd = "LC_ALL=C ls -la " + cleanDir + " 2>&1";
+                string raw = sshManager.RunCommand(cmd, 6000);
+
+                List<string> items = ParseLsLines(raw, dir);
+
+                if (items.Count == 0)
                 {
-                    return "{\"success\":false,\"error\":\"" + EscapeJson(raw.Trim()) + "\"}";
-                }
-
-                List<string> items = new List<string>();
-                string[] lines = raw.Split(new char[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (string rawLine in lines)
-                {
-                    string line = rawLine.Trim();
-                    if (line.StartsWith("total ") || line.Length < 10) continue;
-
-                    char firstChar = line[0];
-                    if (firstChar != '-' && firstChar != 'd' && firstChar != 'l' && 
-                        firstChar != 'c' && firstChar != 'b' && firstChar != 's' && firstChar != 'p')
+                    string rawLower = raw.ToLower();
+                    if (rawLower.Contains("no such file") || rawLower.Contains("cannot access") || 
+                        rawLower.Contains("permission denied") || rawLower.Contains("tidak dapat") || 
+                        rawLower.Contains("izin ditolak") || rawLower.Contains("tidak ada berkas"))
                     {
-                        continue;
+                        return "{\"success\":false,\"error\":\"" + EscapeJson(raw.Trim()) + "\"}";
                     }
 
-                    bool isDir = firstChar == 'd' || firstChar == 'l';
-
-                    string[] parts = System.Text.RegularExpressions.Regex.Split(line, @"\s+");
-                    if (parts.Length < 8) continue;
-
-                    long parsedSize = 0;
-                    int nameStartIdx = 7;
-                    string modified = "";
-
-                    if (long.TryParse(parts[4], out parsedSize))
-                    {
-                        modified = parts[5] + " " + parts[6];
-                        nameStartIdx = 7;
-                    }
-                    else
-                    {
-                        for (int p = 3; p <= Math.Min(6, parts.Length - 3); p++)
-                        {
-                            if (long.TryParse(parts[p], out parsedSize))
-                            {
-                                modified = (p + 1 < parts.Length ? parts[p + 1] : "") + " " + (p + 2 < parts.Length ? parts[p + 2] : "");
-                                nameStartIdx = p + 3;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (nameStartIdx >= parts.Length) continue;
-
-                    string name = "";
-                    for (int i = nameStartIdx; i < parts.Length; i++)
-                    {
-                        if (i > nameStartIdx) name += " ";
-                        name += parts[i];
-                    }
-                    int arrowIdx = name.IndexOf(" -> ");
-                    if (arrowIdx >= 0) name = name.Substring(0, arrowIdx);
-
-                    if (name == "." || name == "..") continue;
-
-                    string fullPath = (dir == "/" ? "" : dir) + "/" + name;
-
-                    items.Add("{\"name\":\"" + EscapeJson(name) + "\",\"path\":\"" + EscapeJson(fullPath) + "\",\"isDirectory\":" + (isDir ? "true" : "false") + ",\"size\":" + parsedSize + ",\"modified\":\"" + EscapeJson(modified.Trim()) + "\"}");
+                    string fallbackRaw = sshManager.RunCommand("ls -la " + cleanDir + " 2>&1", 6000);
+                    items = ParseLsLines(fallbackRaw, dir);
                 }
 
                 string parent = dir == "/" ? "/" : dir.Substring(0, dir.LastIndexOf('/'));
@@ -1479,7 +1533,7 @@ namespace MYSFTP
         {
             try
             {
-                string content = sshManager.RunCommand("\"cat " + EscapeShell(path) + " 2>&1\"", 8000);
+                string content = sshManager.RunCommand("cat '" + EscapeShell(path) + "' 2>&1", 8000);
                 return "{\"success\":true,\"path\":\"" + EscapeJson(path) + "\",\"content\":\"" + EscapeJson(content) + "\"}";
             }
             catch (Exception ex)
@@ -1506,7 +1560,7 @@ namespace MYSFTP
         {
             try
             {
-                sshManager.RunCommand("\"rm -rf " + EscapeShell(path) + " 2>&1\"", 6000);
+                sshManager.RunCommand("rm -rf '" + EscapeShell(path) + "' 2>&1", 6000);
                 return "{\"success\":true}";
             }
             catch (Exception ex)
@@ -1520,9 +1574,9 @@ namespace MYSFTP
             try
             {
                 if (type == "folder")
-                    sshManager.RunCommand("\"mkdir -p " + EscapeShell(path) + " 2>&1\"", 5000);
+                    sshManager.RunCommand("mkdir -p '" + EscapeShell(path) + "' 2>&1", 5000);
                 else
-                    sshManager.RunCommand("\"touch " + EscapeShell(path) + " 2>&1\"", 5000);
+                    sshManager.RunCommand("touch '" + EscapeShell(path) + "' 2>&1", 5000);
                 return "{\"success\":true}";
             }
             catch (Exception ex)
@@ -2543,27 +2597,30 @@ namespace MYSFTP
       });
     }
 
-    function fsLoad(path) {
-      if (isNavigating) return; // hard guard: a second click while loading does nothing
+    function fsLoad(path, forceRefresh) {
       if (!path) path = '/root';
+      if (isNavigating && !forceRefresh) return;
       isNavigating = true;
       showLoader(true);
       setNavButtonsBusy(true);
 
-      // If we already have this folder cached, show it instantly — but only
-      // when it's actually a DIFFERENT folder than what's on screen, so a
-      // double-click on the same button never looks like it jumped back —
-      // there's nothing to jump back to because the content doesn't change
-      // until the real, fresh data arrives.
-      if (fsCache[path] && path !== fsPath) {
+      // Instant optimistic rendering from cache
+      if (fsCache[path]) {
         fsPath = path;
         fsItems = fsCache[path];
         renderFiles();
       }
 
+      var navTimeout = setTimeout(function() {
+        isNavigating = false;
+        showLoader(false);
+        setNavButtonsBusy(false);
+      }, 8000);
+
       fetch('/api/fs/list?path=' + encodeURIComponent(path))
-        .then(function(r){return r.json();})
+        .then(function(r){ return r.json(); })
         .then(function(d) {
+          clearTimeout(navTimeout);
           isNavigating = false;
           showLoader(false);
           setNavButtonsBusy(false);
@@ -2576,6 +2633,7 @@ namespace MYSFTP
             toast('❌ Gagal: ' + (d.error || 'Folder tidak dapat diakses'));
           }
         }).catch(function(err) {
+          clearTimeout(navTimeout);
           isNavigating = false;
           showLoader(false);
           setNavButtonsBusy(false);
@@ -2585,7 +2643,7 @@ namespace MYSFTP
 
     function fsRefresh() {
       delete fsCache[fsPath];
-      fsLoad(fsPath);
+      fsLoad(fsPath, true);
     }
 
     function fsUp() {
