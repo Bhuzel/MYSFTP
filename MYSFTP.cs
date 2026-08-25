@@ -121,30 +121,32 @@ namespace MYSFTP
             }
         }
 
-        public string RunCommand(string command, int timeoutMs = 8000)
+        public string RunCommand(string command, int timeoutMs = 25000)
         {
             if (!EnsureConnected())
-                return string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError;
+                return string.IsNullOrEmpty(lastConnectError) ? "Belum terhubung ke SSH" : lastConnectError;
 
             try
             {
                 using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(command))
                 {
                     cmd.CommandTimeout = TimeSpan.FromMilliseconds(timeoutMs);
-                    string stdout;
-                    try
-                    {
-                        stdout = cmd.Execute();
-                    }
-                    catch (Renci.SshNet.Common.SshOperationTimeoutException)
-                    {
-                        return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
-                    }
+                    string stdout = cmd.Execute();
                     string stderr = cmd.Error;
                     stdout = (stdout ?? "").Trim();
                     stderr = (stderr ?? "").Trim();
-                    return !string.IsNullOrEmpty(stdout) ? stdout : stderr;
+                    if (!string.IsNullOrEmpty(stdout) && !string.IsNullOrEmpty(stderr))
+                        return stdout + "\n" + stderr;
+                    if (!string.IsNullOrEmpty(stdout))
+                        return stdout;
+                    if (!string.IsNullOrEmpty(stderr))
+                        return stderr;
+                    return "(Perintah selesai tanpa output)";
                 }
+            }
+            catch (Renci.SshNet.Common.SshOperationTimeoutException)
+            {
+                return "Koneksi SSH Timeout (Server tidak merespons dalam " + (timeoutMs / 1000) + " detik)";
             }
             catch (Exception ex)
             {
@@ -152,161 +154,8 @@ namespace MYSFTP
             }
         }
 
-        // ── Persistent interactive shell (real Termius-style session) ──
-        // Backed by a single ShellStream multiplexed over the already-open
-        // SshClient connection - no second process, no second handshake.
-        private Renci.SshNet.ShellStream shellStream;
-        private StringBuilder interactiveBuffer = new StringBuilder();
-        private object interactiveLock = new object();
-        private volatile bool interactiveAlive;
-        private Thread interactiveReadThread;
+        // ── Direct Streaming File & Directory Downloads ──
 
-        public bool IsInteractiveAlive { get { return interactiveAlive && shellStream != null; } }
-
-        public void StartInteractiveShell()
-        {
-            StopInteractiveShell();
-            if (!EnsureConnected()) return;
-
-            try
-            {
-                lock (interactiveLock) { interactiveBuffer.Clear(); }
-
-                shellStream = sshClient.CreateShellStream("xterm-256color", 100, 30, 800, 600, 4096);
-                interactiveAlive = true;
-
-                interactiveReadThread = new Thread(new ThreadStart(InteractiveReaderLoop))
-                {
-                    IsBackground = true,
-                    Name = "TerminalReader"
-                };
-                interactiveReadThread.Start();
-            }
-            catch (Exception ex)
-            {
-                interactiveAlive = false;
-                shellStream = null;
-                lock (interactiveLock)
-                {
-                    interactiveBuffer.Append("\r\n[Shell Error: " + ex.Message + "]\r\n");
-                }
-            }
-        }
-
-        private void InteractiveReaderLoop()
-        {
-            byte[] buf = new byte[4096];
-            while (interactiveAlive && shellStream != null)
-            {
-                try
-                {
-                    int n = shellStream.Read(buf, 0, buf.Length);
-                    if (n > 0)
-                    {
-                        string s = Encoding.UTF8.GetString(buf, 0, n);
-                        lock (interactiveLock)
-                        {
-                            interactiveBuffer.Append(s);
-                        }
-                    }
-                    else
-                    {
-                        Thread.Sleep(30);
-                    }
-                }
-                catch
-                {
-                    break;
-                }
-            }
-            interactiveAlive = false;
-        }
-
-        public void SendInteractiveLine(string text)
-        {
-            if (!IsInteractiveAlive)
-            {
-                StartInteractiveShell();
-            }
-            if (shellStream == null) return;
-            try
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(text + "\n");
-                shellStream.Write(bytes, 0, bytes.Length);
-                shellStream.Flush();
-            }
-            catch
-            {
-                interactiveAlive = false;
-            }
-        }
-
-        public void SendInteractiveRaw(string text)
-        {
-            if (shellStream == null) return;
-            try
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(text);
-                shellStream.Write(bytes, 0, bytes.Length);
-                shellStream.Flush();
-            }
-            catch
-            {
-                interactiveAlive = false;
-            }
-        }
-
-        public string PollInteractiveOutput()
-        {
-            lock (interactiveLock)
-            {
-                string result = interactiveBuffer.ToString();
-                interactiveBuffer.Clear();
-                return result;
-            }
-        }
-
-        public void StopInteractiveShell()
-        {
-            interactiveAlive = false;
-            if (shellStream != null)
-            {
-                try { shellStream.Dispose(); } catch { }
-            }
-            shellStream = null;
-            if (interactiveReadThread != null && interactiveReadThread.IsAlive)
-            {
-                try { interactiveReadThread.Abort(); } catch { }
-            }
-            interactiveReadThread = null;
-        }
-
-        public void BreakInteractive()
-        {
-            try
-            {
-                if (IsInteractiveAlive && shellStream != null)
-                {
-                    byte[] ctrlC = new byte[] { 3 };
-                    shellStream.Write(ctrlC, 0, ctrlC.Length);
-                    shellStream.Flush();
-                }
-                else
-                {
-                    StartInteractiveShell();
-                }
-            }
-            catch
-            {
-                StartInteractiveShell();
-            }
-        }
-
-        // ── File I/O over the persistent SFTP channel (no more base64-over-exec) ──
-
-        // Native SFTP directory listing (SSH_FXP_READDIR) - one protocol
-        // round trip on the already-open channel, with real typed attributes,
-        // instead of shelling out to `ls -la` and regex-parsing text.
         public IEnumerable<Renci.SshNet.Sftp.SftpFile> ListDirectory(string path)
         {
             if (!EnsureConnected())
@@ -327,61 +176,43 @@ namespace MYSFTP
             }
         }
 
-        public string WriteRemoteBytes(string remotePath, byte[] data)
+        public void DownloadRemoteFileDirect(string remotePath, Stream outputStream)
         {
-            if (!EnsureConnected()) return string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError;
+            if (!EnsureConnected()) return;
             try
             {
-                string rPath = remotePath.Replace('\\', '/');
-                int lastSlash = rPath.LastIndexOf('/');
-                string rDir = lastSlash > 0 ? rPath.Substring(0, lastSlash) : "/";
-                EnsureRemoteDirectory(rDir);
-
-                using (MemoryStream ms = new MemoryStream(data))
-                {
-                    sftpClient.UploadFile(ms, rPath, true);
-                }
-                return "";
+                sftpClient.DownloadFile(remotePath, outputStream);
             }
-            catch (Exception ex)
+            catch { }
+        }
+
+        public long GetRemoteFileSize(string remotePath)
+        {
+            if (!EnsureConnected()) return 0;
+            try
             {
-                return "SFTP Error: " + ex.Message;
+                return sftpClient.Get(remotePath).Length;
+            }
+            catch
+            {
+                return 0;
             }
         }
 
-        // "mkdir -p" equivalent, since SftpClient.CreateDirectory only makes
-        // one level at a time and throws if the parent doesn't exist yet.
-        private void EnsureRemoteDirectory(string dir)
+        public void DownloadRemoteArchiveDirect(List<string> paths, Stream outputStream, out string outFileName, out string outContentType)
         {
-            if (string.IsNullOrEmpty(dir) || dir == "/" || dir == ".") return;
-            dir = dir.Replace('\\', '/');
-            bool rooted = dir.StartsWith("/");
-            string[] parts = dir.Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            outFileName = "archive.zip";
+            outContentType = "application/zip";
 
-            StringBuilder path = new StringBuilder();
-            if (rooted) path.Append("/");
-            foreach (string part in parts)
-            {
-                if (path.Length > 0 && path[path.Length - 1] != '/') path.Append('/');
-                path.Append(part);
-                string p = path.ToString();
-                try
-                {
-                    if (!sftpClient.Exists(p)) sftpClient.CreateDirectory(p);
-                }
-                catch { /* race with another op / already exists - ignore */ }
-            }
-        }
+            if (!EnsureConnected() || paths == null || paths.Count == 0) return;
 
-        public byte[] ArchiveRemoteItems(List<string> paths)
-        {
-            if (!EnsureConnected() || paths == null || paths.Count == 0) return new byte[0];
             try
             {
-                // Determine parent directory and relative items
                 string firstPath = paths[0].Replace('\\', '/').TrimEnd('/');
                 int lastSlash = firstPath.LastIndexOf('/');
                 string parentDir = lastSlash > 0 ? firstPath.Substring(0, lastSlash) : (lastSlash == 0 ? "/" : ".");
+                string primaryName = Path.GetFileName(firstPath);
+                if (string.IsNullOrEmpty(primaryName)) primaryName = "archive";
 
                 List<string> relNames = new List<string>();
                 foreach (string itemPath in paths)
@@ -413,132 +244,89 @@ namespace MYSFTP
                     if (!string.IsNullOrEmpty(rel)) itemsStr.Append(" '" + EscapeShell(rel) + "'");
                 }
 
-                string tarCmd = "cd '" + EscapeShell(parentDir) + "' && tar -czf - " + itemsStr.ToString().Trim() + " 2>/dev/null";
+                string uid = Guid.NewGuid().ToString("N").Substring(0, 8);
+                string tmpZip = "/tmp/mysftp_" + uid + ".zip";
+                string tmpTar = "/tmp/mysftp_" + uid + ".tar.gz";
 
-                byte[] tarGzBytes;
-                using (Renci.SshNet.SshCommand cmd = sshClient.CreateCommand(tarCmd))
+                // 1. Try server-side zip / python make_archive (native .zip)
+                string createCmd = "cd '" + EscapeShell(parentDir) + "' && (" +
+                    "zip -q -r '" + tmpZip + "' " + itemsStr.ToString().Trim() + " 2>/dev/null || " +
+                    "python3 -c \"import shutil; shutil.make_archive('/tmp/mysftp_" + uid + "', 'zip', '" + EscapeShell(parentDir) + "', '" + EscapeShell(relNames[0]) + "')\" 2>/dev/null || " +
+                    "python -c \"import shutil; shutil.make_archive('/tmp/mysftp_" + uid + "', 'zip', '" + EscapeShell(parentDir) + "', '" + EscapeShell(relNames[0]) + "')\" 2>/dev/null || " +
+                    "tar -czf '" + tmpTar + "' " + itemsStr.ToString().Trim() + " 2>/dev/null" +
+                    ")";
+
+                RunCommand(createCmd, 120000);
+
+                if (sftpClient.Exists(tmpZip))
                 {
-                    cmd.CommandTimeout = TimeSpan.FromSeconds(90);
-                    // Stream the raw tar.gz bytes straight off the command's
-                    // OutputStream - no base64 round-trip and no markers needed,
-                    // since SSH.NET gives us the binary channel directly.
-                    IAsyncResult asyncResult = cmd.BeginExecute();
-                    using (MemoryStream ms = new MemoryStream())
-                    {
-                        cmd.OutputStream.CopyTo(ms);
-                        cmd.EndExecute(asyncResult);
-                        tarGzBytes = ms.ToArray();
-                    }
+                    outFileName = (paths.Count == 1 ? primaryName : ("MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"))) + ".zip";
+                    outContentType = "application/zip";
+                    sftpClient.DownloadFile(tmpZip, outputStream);
+                    RunCommand("rm -f '" + tmpZip + "'", 5000);
                 }
-
-                if (tarGzBytes.Length == 0) return new byte[0];
-
-                Dictionary<string, byte[]> extractedFiles = ExtractTar(tarGzBytes);
-                return ZipPacker.CreateZip(extractedFiles);
+                else if (sftpClient.Exists(tmpTar))
+                {
+                    outFileName = (paths.Count == 1 ? primaryName : ("MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"))) + ".tar.gz";
+                    outContentType = "application/gzip";
+                    sftpClient.DownloadFile(tmpTar, outputStream);
+                    RunCommand("rm -f '" + tmpTar + "'", 5000);
+                }
             }
             catch
             {
-                return new byte[0];
             }
         }
 
-        private static Dictionary<string, byte[]> ExtractTar(byte[] tarGzBytes)
+        public string WriteRemoteBytes(string remotePath, byte[] data)
         {
-            Dictionary<string, byte[]> files = new Dictionary<string, byte[]>();
-            if (tarGzBytes == null || tarGzBytes.Length == 0) return files;
-
+            if (!EnsureConnected()) return string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError;
             try
             {
-                byte[] tarBytes;
-                if (tarGzBytes.Length > 2 && tarGzBytes[0] == 0x1f && tarGzBytes[1] == 0x8b)
+                string rPath = remotePath.Replace('\\', '/');
+                int lastSlash = rPath.LastIndexOf('/');
+                string rDir = lastSlash > 0 ? rPath.Substring(0, lastSlash) : "/";
+                EnsureRemoteDirectory(rDir);
+
+                using (MemoryStream ms = new MemoryStream(data))
                 {
-                    using (MemoryStream inMs = new MemoryStream(tarGzBytes))
-                    using (System.IO.Compression.GZipStream gz = new System.IO.Compression.GZipStream(inMs, System.IO.Compression.CompressionMode.Decompress))
-                    using (MemoryStream outMs = new MemoryStream())
-                    {
-                        byte[] buffer = new byte[16384];
-                        int read;
-                        while ((read = gz.Read(buffer, 0, buffer.Length)) > 0)
-                        {
-                            outMs.Write(buffer, 0, read);
-                        }
-                        tarBytes = outMs.ToArray();
-                    }
+                    sftpClient.UploadFile(ms, rPath, true);
                 }
-                else
-                {
-                    tarBytes = tarGzBytes;
-                }
-
-                int offset = 0;
-                string nextLongName = null;
-                while (offset + 512 <= tarBytes.Length)
-                {
-                    bool allZero = true;
-                    for (int i = 0; i < 512; i++)
-                    {
-                        if (tarBytes[offset + i] != 0) { allZero = false; break; }
-                    }
-                    if (allZero) break;
-
-                    string name = nextLongName;
-                    nextLongName = null;
-                    if (string.IsNullOrEmpty(name))
-                    {
-                        name = Encoding.UTF8.GetString(tarBytes, offset, 100).Trim('\0', ' ');
-                        string prefix = Encoding.UTF8.GetString(tarBytes, offset + 345, 155).Trim('\0', ' ');
-                        if (!string.IsNullOrEmpty(prefix))
-                        {
-                            name = prefix.TrimEnd('/') + "/" + name;
-                        }
-                    }
-
-                    string sizeStr = Encoding.ASCII.GetString(tarBytes, offset + 124, 12).Trim('\0', ' ');
-                    long size = 0;
-                    if (!string.IsNullOrEmpty(sizeStr))
-                    {
-                        try { size = Convert.ToInt64(sizeStr, 8); } catch { }
-                    }
-
-                    char typeFlag = (char)tarBytes[offset + 156];
-                    offset += 512;
-
-                    if (typeFlag == 'L')
-                    {
-                        if (offset + size <= tarBytes.Length)
-                        {
-                            nextLongName = Encoding.UTF8.GetString(tarBytes, offset, (int)size).Trim('\0', ' ', '\r', '\n');
-                        }
-                        long padding = (512 - (size % 512)) % 512;
-                        offset += (int)(size + padding);
-                        continue;
-                    }
-
-                    if (typeFlag == '0' || typeFlag == '\0' || typeFlag == '7')
-                    {
-                        if (offset + size <= tarBytes.Length)
-                        {
-                            byte[] fileData = new byte[size];
-                            Array.Copy(tarBytes, offset, fileData, 0, (int)size);
-                            if (!string.IsNullOrEmpty(name))
-                            {
-                                files[name] = fileData;
-                            }
-                        }
-                        long padding = (512 - (size % 512)) % 512;
-                        offset += (int)(size + padding);
-                    }
-                    else
-                    {
-                        long padding = (512 - (size % 512)) % 512;
-                        offset += (int)(size + padding);
-                    }
-                }
+                return "";
             }
-            catch { }
-
-            return files;
+            catch (Exception ex)
+            {
+                return "SFTP Error: " + ex.Message;
+            }
         }
+
+        private void EnsureRemoteDirectory(string dir)
+        {
+            if (string.IsNullOrEmpty(dir) || dir == "/" || dir == ".") return;
+            dir = dir.Replace('\\', '/');
+            bool rooted = dir.StartsWith("/");
+            string[] parts = dir.Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+            StringBuilder path = new StringBuilder();
+            if (rooted) path.Append("/");
+            foreach (string part in parts)
+            {
+                if (path.Length > 0 && path[path.Length - 1] != '/') path.Append('/');
+                path.Append(part);
+                string p = path.ToString();
+                try
+                {
+                    if (!sftpClient.Exists(p)) sftpClient.CreateDirectory(p);
+                }
+                catch { }
+            }
+        }
+
+        public bool IsInteractiveAlive { get { return IsConnected; } }
+        public void StartInteractiveShell() { }
+        public void StopInteractiveShell() { }
+        public void BreakInteractive() { }
+        public string PollInteractiveOutput() { return ""; }
 
         public void Disconnect()
         {
@@ -626,7 +414,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v208");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v209");
             }
             catch { }
 
@@ -1041,22 +829,8 @@ namespace MYSFTP
 
                     if (activeProtocol == "SFTP" && sshManager.IsConnected)
                     {
-                        if (!sshManager.IsInteractiveAlive)
-                        {
-                            sshManager.StartInteractiveShell();
-                            Thread.Sleep(80);
-                        }
-
-                        if (sshManager.IsInteractiveAlive)
-                        {
-                            sshManager.SendInteractiveLine(cmd);
-                            SendJson(res, "{\"success\":true}");
-                        }
-                        else
-                        {
-                            string output = sshManager.RunCommand(cmd, 15000);
-                            SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(output) + "\"}");
-                        }
+                        string output = sshManager.RunCommand(cmd, 30000);
+                        SendJson(res, "{\"success\":true,\"output\":\"" + EscapeJson(output) + "\"}");
                     }
                     else
                     {
@@ -1198,23 +972,26 @@ namespace MYSFTP
                         {
                             List<string> pList = new List<string>();
                             pList.Add(fPath);
-                            byte[] archive = sshManager.ArchiveRemoteItems(pList);
-                            string dirName = Path.GetFileName(fPath.TrimEnd('/'));
-                            if (string.IsNullOrEmpty(dirName)) dirName = "folder";
-                            res.ContentType = "application/zip";
-                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + dirName + ".zip\"");
-                            res.ContentLength64 = archive.Length;
-                            res.OutputStream.Write(archive, 0, archive.Length);
-                            try { res.OutputStream.Flush(); } catch { }
+                            string outName, outType;
+                            using (MemoryStream ms = new MemoryStream())
+                            {
+                                sshManager.DownloadRemoteArchiveDirect(pList, ms, out outName, out outType);
+                                byte[] data = ms.ToArray();
+                                res.ContentType = outType;
+                                res.AddHeader("Content-Disposition", "attachment; filename=\"" + outName + "\"");
+                                res.ContentLength64 = data.Length;
+                                res.OutputStream.Write(data, 0, data.Length);
+                                try { res.OutputStream.Flush(); } catch { }
+                            }
                         }
                         else
                         {
-                            byte[] fileBytes = sshManager.ReadRemoteBytes(fPath);
                             string fileName = Path.GetFileName(fPath);
                             res.ContentType = "application/octet-stream";
                             res.AddHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
-                            res.ContentLength64 = fileBytes.Length;
-                            res.OutputStream.Write(fileBytes, 0, fileBytes.Length);
+                            long size = sshManager.GetRemoteFileSize(fPath);
+                            if (size > 0) res.ContentLength64 = size;
+                            sshManager.DownloadRemoteFileDirect(fPath, res.OutputStream);
                             try { res.OutputStream.Flush(); } catch { }
                         }
                     }
@@ -1240,13 +1017,15 @@ namespace MYSFTP
                         }
                         else if (File.Exists(localPath))
                         {
-                            byte[] fileBytes = File.ReadAllBytes(localPath);
-                            string fileName = Path.GetFileName(localPath);
-                            res.ContentType = "application/octet-stream";
-                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
-                            res.ContentLength64 = fileBytes.Length;
-                            res.OutputStream.Write(fileBytes, 0, fileBytes.Length);
-                            try { res.OutputStream.Flush(); } catch { }
+                            using (FileStream fs = new FileStream(localPath, FileMode.Open, FileAccess.Read))
+                            {
+                                string fileName = Path.GetFileName(localPath);
+                                res.ContentType = "application/octet-stream";
+                                res.AddHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
+                                res.ContentLength64 = fs.Length;
+                                fs.CopyTo(res.OutputStream);
+                                try { res.OutputStream.Flush(); } catch { }
+                            }
                         }
                     }
                 }
@@ -1257,12 +1036,17 @@ namespace MYSFTP
 
                     if (activeProtocol == "SFTP" && !string.IsNullOrEmpty(activeHost))
                     {
-                        byte[] archive = sshManager.ArchiveRemoteItems(paths);
-                        res.ContentType = "application/zip";
-                        res.AddHeader("Content-Disposition", "attachment; filename=\"MYSFTP_Archive_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".zip\"");
-                        res.ContentLength64 = archive.Length;
-                        res.OutputStream.Write(archive, 0, archive.Length);
-                        try { res.OutputStream.Flush(); } catch { }
+                        string outName, outType;
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            sshManager.DownloadRemoteArchiveDirect(paths, ms, out outName, out outType);
+                            byte[] data = ms.ToArray();
+                            res.ContentType = outType;
+                            res.AddHeader("Content-Disposition", "attachment; filename=\"" + outName + "\"");
+                            res.ContentLength64 = data.Length;
+                            res.OutputStream.Write(data, 0, data.Length);
+                            try { res.OutputStream.Flush(); } catch { }
+                        }
                     }
                     else
                     {
@@ -1890,7 +1674,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.8 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.9 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
@@ -2011,9 +1795,9 @@ namespace MYSFTP
                 <span>💻 SSH Termius Console</span>
               </div>
               <div class=""chips"">
-                <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses streaming log / monitoring (SIGINT)"">🛑 Ctrl+C</button>
+                <button class=""btn btn-sm btn-break"" onclick=""tBreak()"" title=""Hentikan proses (SIGINT)"">🛑 Ctrl+C</button>
                 <span class=""chip"" onclick=""tSend('pm2 status')"">📊 pm2 status</span>
-                <span class=""chip"" onclick=""tSend('pm2 logs')"">📜 pm2 logs</span>
+                <span class=""chip"" onclick=""tSend('pm2 logs --lines 40 --nostream')"">📜 pm2 logs</span>
                 <span class=""chip"" onclick=""tSend('ls -la')"">📁 ls -la</span>
                 <span class=""chip"" onclick=""tSend('df -h')"">💾 df -h</span>
                 <span class=""chip"" onclick=""tSend('free -m')"">🧠 free -m</span>
@@ -3026,10 +2810,8 @@ namespace MYSFTP
       termHistory.push(cmd);
       termHistPos = termHistory.length;
 
-      // Print command immediately for prompt visual feedback
-      tPrint('\r\n\x1b[33m> ' + esc(cmd) + '\x1b[0m\r\n');
-
-      startTermPoll();
+      var pfx = (connProfile ? connProfile.username + '@' + connProfile.host : 'root') + ':~# ';
+      tPrint('\r\n\x1b[33m' + pfx + esc(cmd) + '\x1b[0m\r\n');
 
       fetch('/api/terminal/exec', {
         method: 'POST',
@@ -3038,6 +2820,8 @@ namespace MYSFTP
       }).then(function(r){ return r.json(); }).then(function(d) {
         if (d && d.output) {
           tPrint(d.output + '\r\n');
+        } else if (d && d.error) {
+          tPrint('\x1b[31m' + d.error + '\x1b[0m\r\n');
         }
       }).catch(function(err) {
         tPrint('\r\n\x1b[31m[Error] ' + err.message + '\x1b[0m\r\n');
