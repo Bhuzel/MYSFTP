@@ -67,9 +67,9 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path "Renci.SshNet.dll")) {
-            Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/SSH.NET/2024.1.0" -OutFile "sshnet.zip"
+            Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/SSH.NET/2020.0.2" -OutFile "sshnet.zip"
             Expand-Archive -Path sshnet.zip -DestinationPath sshnet_extracted -Force
-            Copy-Item sshnet_extracted\lib\net462\Renci.SshNet.dll .\Renci.SshNet.dll -Force
+            Copy-Item sshnet_extracted\lib\net40\Renci.SshNet.dll .\Renci.SshNet.dll -Force
           }
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
           & $csc /nologo /target:winexe /platform:x64 /out:MYSFTP.exe /win32icon:app.ico /reference:System.dll /reference:System.Core.dll /reference:Renci.SshNet.dll MYSFTP.cs

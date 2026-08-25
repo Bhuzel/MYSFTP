@@ -247,7 +247,7 @@ namespace MYSFTP
         // Native SFTP directory listing (SSH_FXP_READDIR) - one protocol
         // round trip on the already-open channel, with real typed attributes,
         // instead of shelling out to `ls -la` and regex-parsing text.
-        public IEnumerable<Renci.SshNet.Sftp.ISftpFile> ListDirectory(string path)
+        public IEnumerable<Renci.SshNet.Sftp.SftpFile> ListDirectory(string path)
         {
             if (!EnsureConnected())
                 throw new InvalidOperationException(string.IsNullOrEmpty(lastConnectError) ? "Not connected" : lastConnectError);
@@ -566,7 +566,7 @@ namespace MYSFTP
         {
             try
             {
-                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v206");
+                SshManager.SetCurrentProcessExplicitAppUserModelID("ZellRayy.MYSFTP.Desktop.v207");
             }
             catch { }
 
@@ -1289,7 +1289,7 @@ namespace MYSFTP
                 if (string.IsNullOrEmpty(dir)) dir = "/";
 
                 List<DirEntry> entries = new List<DirEntry>();
-                foreach (Renci.SshNet.Sftp.ISftpFile f in sshManager.ListDirectory(dir))
+                foreach (Renci.SshNet.Sftp.SftpFile f in sshManager.ListDirectory(dir))
                 {
                     string name = f.Name;
                     if (name == "." || name == "..") continue;
@@ -1824,7 +1824,7 @@ namespace MYSFTP
         <div class=""sb-logo"">M</div>
         <div class=""sb-info"">
           <span class=""sb-name"">MYSFTP</span>
-          <span class=""sb-ver"">v2.0.6 • Dedicated Suite</span>
+          <span class=""sb-ver"">v2.0.7 • Dedicated Suite</span>
         </div>
       </div>
       <div class=""sb-nav"">
